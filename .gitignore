@@ -1,0 +1,56 @@
+# ---------------------------------------------------------------------------
+# CompLB3D .gitignore
+# The rule that matters most is the first one: DO NOT COMMIT PALABOS.
+# ---------------------------------------------------------------------------
+
+# Palabos is a third-party library, roughly 100 MB, under its own AGPL licence.
+# It is a dependency, not part of this project. The README says which version
+# to download and where to point CMakeLists.txt.
+versionControl/
+palabos-*/
+**/palabos-v*/
+
+# Build products
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.o
+*.a
+*.so
+complab
+
+# Run output. VTK from a real run is hundreds of megabytes, and it is
+# reproducible from the input, which is the thing worth versioning.
+output/
+results/
+*.vti
+*.vtk
+*.chk
+*.dat.gz
+complab_*.out
+complab_*.err
+slurm-*.out
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Archives and editor droppings
+*.tgz
+*.tar.gz
+*.zip
+.DS_Store
+Thumbs.db
+*~
+*.swp
+.vscode/
+.idea/
+
+# Keep the example geometries: small, they are inputs, and the examples do not
+# run without them.
+!examples/**/*.dat
+!examples/input_shared/*.dat
