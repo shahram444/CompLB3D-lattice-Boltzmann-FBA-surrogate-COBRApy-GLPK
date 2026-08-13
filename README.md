@@ -11,8 +11,18 @@ CompLB3D extends [CompLaB](https://bitbucket.org/MeileLab/complab) from 2D to
 3D and adds an equilibrium chemistry solver, an abiotic kinetics path, and
 mineral dissolution.
 
-Developed in the Meile Lab, Department of Marine Sciences, University of
-Georgia.
+---
+
+## Authors
+
+| | |
+|---|---|
+| **Shahram Asgari** | Department of Marine Sciences, University of Georgia, Athens, GA, USA — <shahram.asgari@uga.edu> |
+| **Christof Meile** | Department of Marine Sciences, University of Georgia, Athens, GA, USA |
+
+Developed in the Meile Lab, University of Georgia. CompLB3D builds on the
+two-dimensional CompLaB, developed by Heewon Jung (Chungnam National
+University) and co-workers with the University of Georgia.
 
 ---
 
@@ -148,8 +158,26 @@ Palabos is a separate work under its own licence and is not distributed here.
 
 ## Citing
 
-See `CITATION.cff`. Please cite the 2D CompLaB paper alongside this one:
-CompLB3D extends that work rather than replacing it.
+Use the **"Cite this repository"** button in the sidebar, which reads
+`CITATION.cff`, or cite directly:
+
+> Asgari, S. and Meile, C. (2026). *CompLB3D: a 3D pore-scale reactive
+> transport model with microbial metabolism* (version 1.0.0).
+> https://github.com/shahram444/CompLB3D-lattice-Boltzmann-FBA-surrogate-COBRApy-GLPK
+
+```bibtex
+@software{asgari_complb3d_2026,
+  author  = {Asgari, Shahram and Meile, Christof},
+  title   = {{CompLB3D: a 3D pore-scale reactive transport model with
+             microbial metabolism}},
+  year    = {2026},
+  version = {1.0.0},
+  url     = {https://github.com/shahram444/CompLB3D-lattice-Boltzmann-FBA-surrogate-COBRApy-GLPK}
+}
+```
+
+Please cite the 2D CompLaB paper alongside this one: CompLB3D extends that work
+rather than replacing it.
 
 ## Contributing
 
