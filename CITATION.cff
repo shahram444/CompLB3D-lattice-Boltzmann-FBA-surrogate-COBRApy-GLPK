@@ -1,0 +1,39 @@
+cff-version: 1.2.0
+title: "CompLB3D: a 3D pore-scale reactive transport model with microbial metabolism"
+message: "If you use this software, please cite it using these metadata."
+type: software
+authors:
+  - family-names: Asgari
+    given-names: Shahram
+    affiliation: "Department of Marine Sciences, University of Georgia"
+    email: shahram.asgari@uga.edu
+  - family-names: Meile
+    given-names: Christof
+    affiliation: "Department of Marine Sciences, University of Georgia"
+repository-code: "https://github.com/shahram444/CompLB3D-lattice-Boltzmann-FBA-surrogate-COBRApy-GLPK"
+license: AGPL-3.0-or-later
+keywords:
+  - lattice Boltzmann
+  - reactive transport
+  - pore scale
+  - flux balance analysis
+  - biogeochemistry
+  - microbial metabolism
+
+# ---------------------------------------------------------------------------
+# The 2D predecessor. Cite it alongside this one: CompLB3D extends CompLaB
+# rather than replacing it, and the flux balance and surrogate machinery here
+# derives from that work.
+#
+# FILL IN the volume, issue, pages and DOI from the published CompLaB paper
+# before the JOSS submission; the fields below are placeholders.
+# ---------------------------------------------------------------------------
+references:
+  - type: article
+    authors:
+      - family-names: Jung
+        given-names: Heewon
+    title: "CompLaB: a reactive transport model for pore-scale simulation of microbial metabolism"
+    year: 2023
+    journal: "TO BE COMPLETED"
+    doi: "TO BE COMPLETED"

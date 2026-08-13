@@ -1,0 +1,1541 @@
+<?xml version="1.0" ?>
+<!-- =========================================================================
+     FULL ZHAO NETWORK (Option B) - CompLaB.xml   |   GEOMETRY: Grain pack
+     =========================================================================
+
+     HOW TO READ THIS FILE (for readers who do not program):
+       - This is a SETTINGS file, not a program. Before a run the solver copies
+         these numbers to set up the simulation.
+       - A setting is a labeled box: <name>value</name> means "name = value".
+         Boxes inside boxes just group related settings.
+       - A COMMENT is a note for humans; the solver ignores it. A comment opens
+         with an angle bracket, an exclamation mark and two dashes, and closes
+         with two dashes and an angle bracket. This whole guide is one comment.
+       - Units: lengths in micrometres (um); concentrations in mol/L (so 2.0e-5
+         means 0.00002 mol/L = 20 micromolar). Rate constants live in the two
+         kinetics files (per day). pH 7 is set as H+ = 1e-7 mol/L.
+       - Boundary types: Dirichlet = "hold this value fixed here" (used to inject
+         a chemical at the inlet, left/x=0 face); Neumann = "free outflow / no
+         imposed value" (outlet and non-injected faces).
+
+     THE THREE GEOMETRIES share THIS SAME xml and the SAME two kinetics files
+     (defineKinetics.hh, defineAbioticKinetics.hh); only the <domain> block below
+     (grid size, dx, geometry.dat) changes between them.
+
+     WHAT THE MODEL CONTAINS
+       95 transported chemicals. The first 24 are the primary substrates: C0..C13 are
+       the reacting species the kinetics files act on; C14..C23 are the extra master
+       components (major ions and mineral surface sites) the FULL equilibrium needs.
+       The remaining 71 (species24..species94) are the secondary complexes of the FULL
+       Zhao R1-R73 tableau, each transported as its own substrate so the speciation is
+       exact and self-contained. 12 microbe pools (B0..B11). The biotic reactions
+       R74-R107 (biotic file) and abiotic reactions R108-R114 (abiotic file; R111 off;
+       R109-R110 folded into the FeS surface-fraction competition), plus the complete
+       R1-R73 chemical equilibrium (ON, solved per voxel each step). Precipitation
+       feedback is ON. Reaction amounts, rates and citations are in the reader document
+       in this folder.
+
+     CONDITIONS: high-sulfate VALIDATION case (Moon et al. 2010; Zhao Table S5):
+       injected U(VI) 20 uM, acetate 5 mM, sulfate 9.5 mM, bicarbonate 10 mM,
+       pH 7; initial Fe(III) easy/medium/hard = 12.5 / 20 / 2 mM on the grains;
+       seed microbes on the biofilm surfaces (see <microbiology>). This case makes
+       the sulfate reducers active, so sulfide -> FeS -> abiotic U(VI) reduction
+       all switch on (the full biotic/abiotic competition).
+
+     Substrate order (fixes the C[] indices used by the kinetics files):
+       C0=Ac C1=U6 C2=U4 C3=Fe2 C4=Fe3easy C5=Fe3medium C6=Fe3hard
+       C7=SO4 C8=HS C9=FeS C10=HCO3 C11=H+ C12=CH4 C13=S0
+       (equilibrium-only) C14=Ca C15=Mg C16=Na C17=K C18=Cl C19=HPO4 C20=NH3
+       C21=SOH C22=FesOH C23=ClayFe3
+     ========================================================================= -->
+<parameters>
+
+    <path>
+        <src_path>src</src_path>                 <!-- source code folder -->
+        <input_path>input</input_path>           <!-- holds geometry.dat -->
+        <output_path>output</output_path>        <!-- results are written here -->
+    </path>
+
+    <!-- master ON/OFF switches -->
+    <simulation_mode>
+        <biotic_mode>true</biotic_mode>                           <!-- microbes ON -->
+        <enable_kinetics>true</enable_kinetics>                   <!-- biotic R74-R107 ON -->
+        <enable_abiotic_kinetics>true</enable_abiotic_kinetics>   <!-- abiotic R108-R114 ON -->
+        <enable_validation_diagnostics>false</enable_validation_diagnostics> <!-- print mass-balance/progress -->
+    </simulation_mode>
+
+    <!-- ===== THE ONLY BLOCK THAT DIFFERS BETWEEN THE THREE GEOMETRIES ===== -->
+    <LB_numerics>
+        <domain>
+            <nx>64</nx>                          <!-- voxels along x (flow +x) -->
+            <ny>48</ny>                          <!-- voxels along y -->
+            <nz>20</nz>                          <!-- voxels along z -->
+            <dx>1.0</dx>                          <!-- voxel edge length -->
+            <unit>um</unit>                       <!-- micrometres -->
+            <characteristic_length>16</characteristic_length> <!-- open pore width in um (solver divides by dx to get lattice units) -->
+            <filename>geometry.dat</filename>     <!-- material map in input/ (Simple duct, tall one-wall channel, porosity 0.750) -->
+            <material_numbers>
+                <pore>2</pore>                    <!-- 2 = open pore (fluid) -->
+                <solid>0</solid>                  <!-- 0 = solid grain -->
+                <bounce_back>1</bounce_back>      <!-- 1 = no-slip wall -->
+                <!-- The biofilm is HETEROGENEOUS: four microbe types occupy patchy regions of the grain
+                     surfaces, coded 3=Geobacter, 4=Rhodoferax, 5=methanogen, 6=sulfate reducer. The three
+                     Geobacter Fe-class pools share the Geobacter code, the three Rhodoferax pools share the
+                     Rhodoferax code; the four suspended pools use the LBM solver and start at 0 (no core code). -->
+                <!-- ONLY the 8 attached (CA) pools get a material_number. The 4 suspended (LBM) pools
+                     get NO material_number so the solver classifies them as planktonic (mobile) and puts
+                     them in the free-biomass lattices; giving them a material_number would misclassify them
+                     as biofilm and leave the planktonic list empty, which crashes the NS-ADE coupling. -->
+                <microbe0>3</microbe0>  <microbe1>3</microbe1>  <microbe2>3</microbe2>   <!-- Geobacter hard/medium/easy (attached CA) -->
+                <microbe4>4</microbe4>  <microbe5>4</microbe5>  <microbe6>4</microbe6>   <!-- Rhodoferax hard/medium/easy (attached CA) -->
+                <microbe8>5</microbe8>                                                   <!-- methanogen attached (CA) -->
+                <microbe10>6</microbe10>                                                 <!-- sulfate reducer attached (CA) -->
+                <!-- microbe3, microbe7, microbe9, microbe11 (the four suspended LBM pools) intentionally omitted: planktonic, start 0 -->
+            </material_numbers>
+        </domain>
+        <delta_P>1.5e-4</delta_P>                 <!-- SEED pressure drop (small on purpose): the solver auto-tunes it to hit Peclet below; small seed keeps the first flow solve stable (Ma low) so the tuning measures the true permeability. Raise only if the flow ends up too slow (Pe achieved << 1). -->
+        <Peclet>1.0</Peclet>                      <!-- advection vs diffusion balance (~equal) -->
+        <tau>0.8</tau>                            <!-- LBM relaxation time; sets the model viscosity/diffusivity -->
+        <track_performance>false</track_performance>
+        <iteration>
+            <ns_max_iT1>100000</ns_max_iT1>       <!-- max flow-solver steps, first solve -->
+            <ns_max_iT2>100000</ns_max_iT2>       <!-- max flow-solver steps, later re-solves -->
+            <ns_converge_iT1>1e-8</ns_converge_iT1>  <!-- "flow is steady" test (first) -->
+            <ns_converge_iT2>1e-6</ns_converge_iT2>  <!-- "flow is steady" test (later) -->
+            <ade_max_iT>200000</ade_max_iT>       <!-- reaction/transport steps (advance to quasi-steady; see docs Section 12) -->
+            <ade_converge_iT>1e-8</ade_converge_iT>
+            <ns_update_interval>1</ns_update_interval>
+            <ade_update_interval>1</ade_update_interval>
+        </iteration>
+    </LB_numerics>
+
+    <!-- ===== THE TRANSPORTED CHEMICALS (95 total) =====
+         species0..species13  (C0..C13): the reacting species used by the kinetics files (this exact order).
+         species14..species23 (C14..C23): the extra equilibrium master components (major ions, surface sites);
+                              the kinetics files do not touch them.
+         species24..species94: the 71 secondary complexes of the FULL R1-R73 equilibrium (aqueous ones diffuse;
+                              the 8 surface complexes are immobile). They start at 0 and are produced by the
+                              equilibrium solver each step from the components above. -->
+    <chemistry>
+        <number_of_substrates>95</number_of_substrates>
+
+        <substrate0>                                            <!-- C0 acetate (electron DONOR; injected) -->
+            <name_of_substrates>Ac</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>2e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.005</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate0>
+
+        <substrate1>                                            <!-- C1 U(VI) dissolved (the contaminant; injected) -->
+            <name_of_substrates>U6</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>6e-10</in_pore><in_biofilm>3e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>2e-05</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate1>
+
+        <substrate2>                                            <!-- C2 U(IV) precipitate = the cleaned-up sink (solid) -->
+            <name_of_substrates>U4</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate2>
+
+        <substrate3>                                            <!-- C3 Fe(II) dissolved (made by iron reducers) -->
+            <name_of_substrates>Fe2</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>7e-10</in_pore><in_biofilm>3.5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate3>
+
+        <substrate4>                                            <!-- C4 Fe(III) EASY (amorphous+clay), solid -->
+            <name_of_substrates>Fe3e</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0.0125</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate4>
+
+        <substrate5>                                            <!-- C5 Fe(III) MEDIUM (poorly crystalline), solid -->
+            <name_of_substrates>Fe3m</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0.02</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate5>
+
+        <substrate6>                                            <!-- C6 Fe(III) HARD (goethite), solid -->
+            <name_of_substrates>Fe3h</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0.002</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate6>
+
+        <substrate7>                                            <!-- C7 sulfate (SRB electron acceptor; injected) -->
+            <name_of_substrates>SO4</name_of_substrates>
+            <initial_concentration>0.0095</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0095</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate7>
+
+        <substrate8>                                            <!-- C8 sulfide (made by SRB; the biotic->abiotic bridge) -->
+            <name_of_substrates>HS</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1.5e-09</in_pore><in_biofilm>7.5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate8>
+
+        <substrate9>                                            <!-- C9 mackinawite FeS, solid (the abiotic reductant) -->
+            <name_of_substrates>FeS</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate9>
+
+        <substrate10>                                            <!-- C10 bicarbonate (carbon product; injected as ambient) -->
+            <name_of_substrates>HCO3</name_of_substrates>
+            <initial_concentration>0.01</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1.2e-09</in_pore><in_biofilm>2.4e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.01</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate10>
+
+        <substrate11>                                            <!-- C11 H+ (proton; sets pH ~7 at inlet) -->
+            <name_of_substrates>Hp</name_of_substrates>
+            <initial_concentration>1.9022e-3</initial_concentration>   <!-- FIX 2026-07: TOTAL proton (TOTH) for pH~7. Was free H+ 1e-7, which the equilibrium solver read as the proton TOTAL and diverged (residual ~10). Free H+ (=1e-7, pH7) is now a solver OUTPUT. -->
+            <substrate_diffusion_coefficients><in_pore>9.3e-09</in_pore><in_biofilm>1.86e-09</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>1.9022e-3</left_boundary_condition>   <!-- FIX 2026-07: injected TOTAL proton (was free H+ 1e-7) -->
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate11>
+
+        <substrate12>                                            <!-- C12 methane (methanogen product) -->
+            <name_of_substrates>CH4</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1.5e-09</in_pore><in_biofilm>7.5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate12>
+
+        <substrate13>                                            <!-- C13 elemental sulfur S0, solid (from R108,R113) -->
+            <name_of_substrates>S0</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate13>
+
+        <substrate14>                                            <!-- C14 calcium Ca2+ (major ion; equilibrium only) -->
+            <name_of_substrates>Ca</name_of_substrates>
+            <initial_concentration>0.0045</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>7.9e-10</in_pore><in_biofilm>4e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0045</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate14>
+
+        <substrate15>                                            <!-- C15 magnesium Mg2+ (major ion; equilibrium only) -->
+            <name_of_substrates>Mg</name_of_substrates>
+            <initial_concentration>0.0049</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>7e-10</in_pore><in_biofilm>3.5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0049</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate15>
+
+        <substrate16>                                            <!-- C16 sodium Na+ (major ion; equilibrium only) -->
+            <name_of_substrates>Na</name_of_substrates>
+            <initial_concentration>0.0105</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1.3e-09</in_pore><in_biofilm>6.5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0105</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate16>
+
+        <substrate17>                                            <!-- C17 potassium K+ (major ion; equilibrium only) -->
+            <name_of_substrates>K</name_of_substrates>
+            <initial_concentration>0.00033</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>2e-09</in_pore><in_biofilm>1e-09</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.00033</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate17>
+
+        <substrate18>                                            <!-- C18 chloride Cl- (major ion; equilibrium only) -->
+            <name_of_substrates>Cl</name_of_substrates>
+            <initial_concentration>0.0035</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>2e-09</in_pore><in_biofilm>1e-09</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0035</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate18>
+
+        <substrate19>                                            <!-- C19 phosphate HPO4 2- (nutrient; equilibrium only) -->
+            <name_of_substrates>HPO4</name_of_substrates>
+            <initial_concentration>1e-05</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>7e-10</in_pore><in_biofilm>3.5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>1e-05</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate19>
+
+        <substrate20>                                            <!-- C20 ammonia/ammonium NH3 (nutrient; equilibrium only) -->
+            <name_of_substrates>NH3</name_of_substrates>
+            <initial_concentration>0.0003</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1.6e-09</in_pore><in_biofilm>8e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0003</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate20>
+
+        <substrate21>                                            <!-- C21 generic surface site (surface complexation; immobile) -->
+            <name_of_substrates>SOH</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0.001</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate21>
+
+        <substrate22>                                            <!-- C22 iron-oxide surface site (surface complexation; immobile) -->
+            <name_of_substrates>FesOH</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0.022</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate22>
+
+        <substrate23>                                            <!-- C23 clay-bound Fe(III) site (surface complexation; immobile) -->
+            <name_of_substrates>ClayFe3</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0.0063</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate23>
+
+        <substrate24>                                            <!-- R1 aqueous complex -->
+            <name_of_substrates>CO2</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate24>
+
+        <substrate25>                                            <!-- R2 aqueous complex -->
+            <name_of_substrates>CO3_2m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate25>
+
+        <substrate26>                                            <!-- R3 aqueous complex -->
+            <name_of_substrates>CaCO3</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate26>
+
+        <substrate27>                                            <!-- R4 aqueous complex -->
+            <name_of_substrates>CaCl_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate27>
+
+        <substrate28>                                            <!-- R5 aqueous complex -->
+            <name_of_substrates>CaCl2</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate28>
+
+        <substrate29>                                            <!-- R6 aqueous complex -->
+            <name_of_substrates>CaH2PO4_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate29>
+
+        <substrate30>                                            <!-- R7 aqueous complex -->
+            <name_of_substrates>CaHCO3_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate30>
+
+        <substrate31>                                            <!-- R8 aqueous complex -->
+            <name_of_substrates>CaHPO4</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate31>
+
+        <substrate32>                                            <!-- R9 aqueous complex -->
+            <name_of_substrates>CaOH_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate32>
+
+        <substrate33>                                            <!-- R10 aqueous complex -->
+            <name_of_substrates>CaPO4_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate33>
+
+        <substrate34>                                            <!-- R11 aqueous complex -->
+            <name_of_substrates>FeCO3</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate34>
+
+        <substrate35>                                            <!-- R12 aqueous complex -->
+            <name_of_substrates>FeCl_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate35>
+
+        <substrate36>                                            <!-- R13 aqueous complex -->
+            <name_of_substrates>FeCl2</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate36>
+
+        <substrate37>                                            <!-- R14 aqueous complex -->
+            <name_of_substrates>FeH2PO4_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate37>
+
+        <substrate38>                                            <!-- R15 aqueous complex -->
+            <name_of_substrates>FeHCO3_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate38>
+
+        <substrate39>                                            <!-- R16 aqueous complex -->
+            <name_of_substrates>FeHPO4</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate39>
+
+        <substrate40>                                            <!-- R17 aqueous complex -->
+            <name_of_substrates>FeOH_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate40>
+
+        <substrate41>                                            <!-- R18 aqueous complex -->
+            <name_of_substrates>FePO4_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate41>
+
+        <substrate42>                                            <!-- R19 aqueous complex -->
+            <name_of_substrates>H2PO4_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate42>
+
+        <substrate43>                                            <!-- R20 aqueous complex -->
+            <name_of_substrates>H2S</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate43>
+
+        <substrate44>                                            <!-- R21 aqueous complex -->
+            <name_of_substrates>H3PO4</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate44>
+
+        <substrate45>                                            <!-- R22 aqueous complex -->
+            <name_of_substrates>KCl</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate45>
+
+        <substrate46>                                            <!-- R23 aqueous complex -->
+            <name_of_substrates>KHPO4_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate46>
+
+        <substrate47>                                            <!-- R24 aqueous complex -->
+            <name_of_substrates>KHSO4</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate47>
+
+        <substrate48>                                            <!-- R25 aqueous complex -->
+            <name_of_substrates>KSO4_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate48>
+
+        <substrate49>                                            <!-- R26 aqueous complex -->
+            <name_of_substrates>MgCO3</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate49>
+
+        <substrate50>                                            <!-- R27 aqueous complex -->
+            <name_of_substrates>MgCl_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate50>
+
+        <substrate51>                                            <!-- R28 aqueous complex -->
+            <name_of_substrates>MgH2PO4_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate51>
+
+        <substrate52>                                            <!-- R29 aqueous complex -->
+            <name_of_substrates>MgHCO3_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate52>
+
+        <substrate53>                                            <!-- R30 aqueous complex -->
+            <name_of_substrates>MgHPO4</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate53>
+
+        <substrate54>                                            <!-- R31 aqueous complex -->
+            <name_of_substrates>MgPO4_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate54>
+
+        <substrate55>                                            <!-- R32 aqueous complex -->
+            <name_of_substrates>NH4_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate55>
+
+        <substrate56>                                            <!-- R33 aqueous complex -->
+            <name_of_substrates>NH4Ac</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate56>
+
+        <substrate57>                                            <!-- R34 aqueous complex -->
+            <name_of_substrates>NH4SO4_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate57>
+
+        <substrate58>                                            <!-- R35 aqueous complex -->
+            <name_of_substrates>NaCO3_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate58>
+
+        <substrate59>                                            <!-- R36 aqueous complex -->
+            <name_of_substrates>NaCl</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate59>
+
+        <substrate60>                                            <!-- R37 aqueous complex -->
+            <name_of_substrates>NaHCO3</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate60>
+
+        <substrate61>                                            <!-- R38 aqueous complex -->
+            <name_of_substrates>NaHPO4_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate61>
+
+        <substrate62>                                            <!-- R39 aqueous complex -->
+            <name_of_substrates>OH_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate62>
+
+        <substrate63>                                            <!-- R40 aqueous complex -->
+            <name_of_substrates>PO4_3m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate63>
+
+        <substrate64>                                            <!-- R41 aqueous complex -->
+            <name_of_substrates>S_2m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate64>
+
+        <substrate65>                                            <!-- R42 aqueous complex -->
+            <name_of_substrates>U2OH2_2p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate65>
+
+        <substrate66>                                            <!-- R43 aqueous complex -->
+            <name_of_substrates>U2CO3OH3_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate66>
+
+        <substrate67>                                            <!-- R44 aqueous complex -->
+            <name_of_substrates>U2OH_3p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate67>
+
+        <substrate68>                                            <!-- R45 aqueous complex -->
+            <name_of_substrates>U3CO36_6m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate68>
+
+        <substrate69>                                            <!-- R46 aqueous complex -->
+            <name_of_substrates>U3OH4_2p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate69>
+
+        <substrate70>                                            <!-- R47 aqueous complex -->
+            <name_of_substrates>U3OH5_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate70>
+
+        <substrate71>                                            <!-- R48 aqueous complex -->
+            <name_of_substrates>U3OH5CO2_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate71>
+
+        <substrate72>                                            <!-- R49 aqueous complex -->
+            <name_of_substrates>UO2CO3_2m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate72>
+
+        <substrate73>                                            <!-- R50 aqueous complex -->
+            <name_of_substrates>UO2CO3_3m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate73>
+
+        <substrate74>                                            <!-- R51 aqueous complex -->
+            <name_of_substrates>UO2H2PO4H3PO4_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate74>
+
+        <substrate75>                                            <!-- R52 aqueous complex -->
+            <name_of_substrates>UO2H2PO42</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate75>
+
+        <substrate76>                                            <!-- R53 aqueous complex -->
+            <name_of_substrates>UO2OH2</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate76>
+
+        <substrate77>                                            <!-- R54 aqueous complex -->
+            <name_of_substrates>UO2OH3_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate77>
+
+        <substrate78>                                            <!-- R55 aqueous complex -->
+            <name_of_substrates>UO2OH4_2m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate78>
+
+        <substrate79>                                            <!-- R56 aqueous complex -->
+            <name_of_substrates>UO2H2PO4_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate79>
+
+        <substrate80>                                            <!-- R57 aqueous complex -->
+            <name_of_substrates>UO2PO32</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate80>
+
+        <substrate81>                                            <!-- R58 aqueous complex -->
+            <name_of_substrates>CH3COO_m</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate81>
+
+        <substrate82>                                            <!-- R59 aqueous complex -->
+            <name_of_substrates>CaAc_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate82>
+
+        <substrate83>                                            <!-- R60 aqueous complex -->
+            <name_of_substrates>FeAc_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate83>
+
+        <substrate84>                                            <!-- R61 aqueous complex -->
+            <name_of_substrates>MgAc_p</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate84>
+
+        <substrate85>                                            <!-- R62 aqueous complex -->
+            <name_of_substrates>NaAc</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate85>
+
+        <substrate86>                                            <!-- R63 aqueous complex -->
+            <name_of_substrates>KAc</name_of_substrates>
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>1e-09</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate86>
+
+        <substrate87>                                            <!-- R64 surface complex (immobile, on the grain sites) -->
+            <name_of_substrates>SH2PO4</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate87>
+
+        <substrate88>                                            <!-- R65 surface complex (immobile, on the grain sites) -->
+            <name_of_substrates>SHPO4_m</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate88>
+
+        <substrate89>                                            <!-- R66 surface complex (immobile, on the grain sites) -->
+            <name_of_substrates>SPO4_2m</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate89>
+
+        <substrate90>                                            <!-- R69 surface complex (immobile, on the grain sites) -->
+            <name_of_substrates>FesOFe2_p</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate90>
+
+        <substrate91>                                            <!-- R70 surface complex (immobile, on the grain sites) -->
+            <name_of_substrates>SOFe_p</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate91>
+
+        <substrate92>                                            <!-- R71 surface complex (immobile, on the grain sites) -->
+            <name_of_substrates>FesOUO2_p</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate92>
+
+        <substrate93>                                            <!-- R72 surface complex (immobile, on the grain sites) -->
+            <name_of_substrates>FeClayFe3</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate93>
+
+        <substrate94>                                            <!-- R73 surface complex (immobile, on the grain sites) -->
+            <name_of_substrates>SOUO2</name_of_substrates>
+            <immobile>true</immobile>              <!-- solid: stays put, only reacts in place (D=0 placeholder) -->
+            <initial_concentration>0</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>0</in_pore><in_biofilm>0</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate94>
+    </chemistry>
+
+    <!-- ===== MINERAL PRECIPITATION + PORE-FILLING (Volume-of-Pixel) ===== -->
+    <!-- WHAT PRECIPITATES (this is Zhao's chemistry, and it runs regardless of this block):
+         every solid forms and accumulates IMMOBILE in place, on every step, from the kinetics:
+         U(IV) uraninite (C2), FeS mackinawite (C9), and S0 elemental sulfur (C13). That IS the
+         precipitation reaction happening. Zhao stops there (a continuum column model: solids pile
+         up but the pore shape never changes).
+         WHAT THIS BLOCK ADDS (pore-scale, beyond Zhao): it lets the precipitated solid physically
+         OCCUPY pore space and clog it. The solver's feedback tracks ONE solid density field to decide
+         when a voxel has become solid, so we point it at FeS (C9) - by far the volumetrically dominant
+         precipitate here (Fe from 12.5-20 mM Fe(III) + sulfide from 9.5 mM sulfate, so FeS reaches mM+,
+         ~100x more than the 20 uM influent uranium that makes U(IV)). U(IV) and S0 pore volume is
+         negligible next to FeS, so FeS is the right single proxy for physical pore-filling. -->
+    <precipitation>
+        <enabled>true</enabled>                   <!-- ON: the precipitated FeS physically fills and can clog the pore -->
+        <solid_substrate>9</solid_substrate>     <!-- FeS = C9, the pore-filling mineral (see note above) -->
+        <max_precipRho>48.9</max_precipRho>      <!-- mol/L of FeS that = a voxel FULLY solid. PHYSICAL value from
+                                                       mackinawite molar volume: MW 87.91 g/mol / density 4.30 g/cm3
+                                                       = 20.44 cm3/mol -> 1000/20.44 = 48.9 mol/L to fill 1 L of voxel.
+                                                       (The old 5.0e-4 was a T9 TEST accelerator ~1e5x too low, which
+                                                       clogged almost instantly and unphysically. With the real value a
+                                                       voxel seals only when FeS has genuinely filled it - clogging then
+                                                       happens if and only if enough FeS actually precipitates, as in
+                                                       reality. For a sub-voxel throat-sealing criterion use a fraction,
+                                                       e.g. 0.6*48.9 = 29.3 mol/L.) -->
+        <surface_only>1</surface_only>           <!-- 1 = grow only on wall/interface voxels (heterogeneous nucleation, physically correct: FeS nucleates on surfaces) -->
+        <perm_ratio>0.0</perm_ratio>             <!-- 0 = a fully-FeS voxel is impermeable (hard wall) -->
+        <update_interval>500</update_interval>   <!-- re-check fill + re-solve the flow every 500 steps -->
+    </precipitation>
+
+    <!-- ===== THE 12 MICROBE POOLS (B0..B11) =====
+         Each pool: solver (CA = attached biofilm; LBM = suspended/mobile),
+         seed density, decay, and the per-substrate Ks and Vmax arrays (14 numbers
+         each, in the C0..C13 order; 0 where a substrate is not used). NOTE: the
+         actual rate maths lives in defineKinetics.hh (these arrays document the
+         same values for the framework and the reader). -->
+    <microbiology>
+        <number_of_microbes>12</number_of_microbes>
+        <maximum_biomass_density>1e-4</maximum_biomass_density>  <!-- biofilm cap per voxel, mol/L (same unit as initial_densities; = 100 micromolar, ~24x the Geobacter seed) -->
+        <thrd_biofilm_fraction>0.1</thrd_biofilm_fraction>       <!-- fill fraction that counts as biofilm -->
+        <CA_method>half</CA_method>                              <!-- biofilm-spreading rule -->
+
+        <microbe0>                                          <!-- B0 Geobacter on HARD Fe(III) + U(VI) -->
+            <name_of_microbes>Geobacter_hard</name_of_microbes>
+            <solver_type>CA</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>1.4e-06</initial_densities>  <!-- seed biomass in mol/L (= 1.4 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <viscosity_ratio_in_biofilm>10.0</viscosity_ratio_in_biofilm>  <!-- biofilm is ~10x more flow-resistant than open pore (CA/attached pool) -->
+            <half_saturation_constants>0.0001 2e-05 0 0 0 0 0.0025 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>0 4.05e-6 0 0 0 0 8.68e-6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe0>
+
+        <microbe1>                                          <!-- B1 Geobacter on MEDIUM Fe(III) + U(VI) -->
+            <name_of_microbes>Geobacter_medium</name_of_microbes>
+            <solver_type>CA</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>1.4e-06</initial_densities>  <!-- seed biomass in mol/L (= 1.4 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <viscosity_ratio_in_biofilm>10.0</viscosity_ratio_in_biofilm>  <!-- biofilm is ~10x more flow-resistant than open pore (CA/attached pool) -->
+            <half_saturation_constants>0.0001 2e-05 0 0 0 0.0025 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>0 4.05e-6 0 0 0 1.74e-5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe1>
+
+        <microbe2>                                          <!-- B2 Geobacter on EASY Fe(III) + U(VI) -->
+            <name_of_microbes>Geobacter_easy</name_of_microbes>
+            <solver_type>CA</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>1.3e-06</initial_densities>  <!-- seed biomass in mol/L (= 1.3 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>2.31e-8</decay_coefficient>
+            <viscosity_ratio_in_biofilm>10.0</viscosity_ratio_in_biofilm>  <!-- biofilm is ~10x more flow-resistant than open pore (CA/attached pool) -->
+            <half_saturation_constants>0.0001 2e-05 0 0 0.0025 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>0 4.05e-6 0 0 1.74e-5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe2>
+
+        <microbe3>                                          <!-- B3 Geobacter suspended (U(VI) only) -->
+            <name_of_microbes>Geobacter_susp</name_of_microbes>
+            <solver_type>LBM</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>0</initial_densities>  <!-- seed biomass in mol/L (= 0 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <biomass_diffusion_coefficients><in_pore>1.0e-10</in_pore><in_biofilm>1.0e-11</in_biofilm></biomass_diffusion_coefficients>  <!-- planktonic cells diffuse slowly; needed for the LBM pool -->
+            <half_saturation_constants>0.0001 2e-05 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>0 4.05e-6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe3>
+
+        <microbe4>                                          <!-- B4 Rhodoferax on HARD Fe(III) -->
+            <name_of_microbes>Rhodoferax_hard</name_of_microbes>
+            <solver_type>CA</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>1.7e-07</initial_densities>  <!-- seed biomass in mol/L (= 0.17 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <viscosity_ratio_in_biofilm>10.0</viscosity_ratio_in_biofilm>  <!-- biofilm is ~10x more flow-resistant than open pore (CA/attached pool) -->
+            <half_saturation_constants>5.4e-06 0 0 0 0 0 0.00025 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>0 0 0 0 0 0 2.08e-6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe4>
+
+        <microbe5>                                          <!-- B5 Rhodoferax on MEDIUM Fe(III) -->
+            <name_of_microbes>Rhodoferax_medium</name_of_microbes>
+            <solver_type>CA</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>1.7e-07</initial_densities>  <!-- seed biomass in mol/L (= 0.17 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <viscosity_ratio_in_biofilm>10.0</viscosity_ratio_in_biofilm>  <!-- biofilm is ~10x more flow-resistant than open pore (CA/attached pool) -->
+            <half_saturation_constants>5.4e-06 0 0 0 0 0.00025 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>0 0 0 0 0 2.08e-6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe5>
+
+        <microbe6>                                          <!-- B6 Rhodoferax on EASY Fe(III) -->
+            <name_of_microbes>Rhodoferax_easy</name_of_microbes>
+            <solver_type>CA</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>1.6e-07</initial_densities>  <!-- seed biomass in mol/L (= 0.16 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <viscosity_ratio_in_biofilm>10.0</viscosity_ratio_in_biofilm>  <!-- biofilm is ~10x more flow-resistant than open pore (CA/attached pool) -->
+            <half_saturation_constants>5.4e-06 0 0 0 0.00025 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>0 0 0 0 2.08e-6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe6>
+
+        <microbe7>                                          <!-- B7 Rhodoferax suspended -->
+            <name_of_microbes>Rhodoferax_susp</name_of_microbes>
+            <solver_type>LBM</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>0</initial_densities>  <!-- seed biomass in mol/L (= 0 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <biomass_diffusion_coefficients><in_pore>1.0e-10</in_pore><in_biofilm>1.0e-11</in_biofilm></biomass_diffusion_coefficients>  <!-- planktonic cells diffuse slowly; needed for the LBM pool -->
+            <half_saturation_constants>5.4e-06 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe7>
+
+        <microbe8>                                          <!-- B8 methanogen attached (acetate->methane) -->
+            <name_of_microbes>Methanogen_att</name_of_microbes>
+            <solver_type>CA</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>4e-06</initial_densities>  <!-- seed biomass in mol/L (= 4 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <viscosity_ratio_in_biofilm>10.0</viscosity_ratio_in_biofilm>  <!-- biofilm is ~10x more flow-resistant than open pore (CA/attached pool) -->
+            <half_saturation_constants>1e-05 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>1.62e-4 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe8>
+
+        <microbe9>                                          <!-- B9 methanogen suspended -->
+            <name_of_microbes>Methanogen_susp</name_of_microbes>
+            <solver_type>LBM</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>0</initial_densities>  <!-- seed biomass in mol/L (= 0 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <biomass_diffusion_coefficients><in_pore>1.0e-10</in_pore><in_biofilm>1.0e-11</in_biofilm></biomass_diffusion_coefficients>  <!-- planktonic cells diffuse slowly; needed for the LBM pool -->
+            <half_saturation_constants>1e-05 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>1.62e-4 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe9>
+
+        <microbe10>                                          <!-- B10 sulfate reducer attached (sulfate->sulfide) -->
+            <name_of_microbes>SRB_att</name_of_microbes>
+            <solver_type>CA</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>2e-06</initial_densities>  <!-- seed biomass in mol/L (= 2 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <viscosity_ratio_in_biofilm>10.0</viscosity_ratio_in_biofilm>  <!-- biofilm is ~10x more flow-resistant than open pore (CA/attached pool) -->
+            <half_saturation_constants>7e-5 0 0 0 0 0 0 0.0002 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>0 0 0 0 0 0 0 2.55e-5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe10>
+
+        <microbe11>                                          <!-- B11 sulfate reducer suspended -->
+            <name_of_microbes>SRB_susp</name_of_microbes>
+            <solver_type>LBM</solver_type>
+            <reaction_type>kinetics</reaction_type>
+            <initial_densities>0</initial_densities>  <!-- seed biomass in mol/L (= 0 micromolar); kinetics use B in mol/L, same unit as the chemicals -->
+            <decay_coefficient>6.94e-8</decay_coefficient>
+            <biomass_diffusion_coefficients><in_pore>1.0e-10</in_pore><in_biofilm>1.0e-11</in_biofilm></biomass_diffusion_coefficients>  <!-- planktonic cells diffuse slowly; needed for the LBM pool -->
+            <half_saturation_constants>7e-5 0 0 0 0 0 0 0.0002 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</half_saturation_constants>
+            <maximum_uptake_flux>0 0 0 0 0 0 0 2.55e-5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0</maximum_uptake_flux>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe11>
+    </microbiology>
+
+    <!-- ===== CHEMICAL EQUILIBRIUM (fast speciation) - FULL Zhao network, ON, solved per voxel each step =====
+         Model (mass-action, PCF/Anderson solver): log10[species_i] = logK[i] + sum_j S[i][j]*log10[component_j];
+         the conserved quantity per component j is the TOTAL  T[j] = sum_i S[i][j]*[species_i], which transport
+         and kinetics change and equilibrium only re-distributes. EVERY row below is one transported substrate:
+           - species0..species23  = the 24 primary substrates. The 17 that ARE master components carry an
+             identity row (a single 1 in their own column, logK 0) so the substrate holds the FREE ion; the 7
+             solids/products (U4, Fe3 easy/med/hard, FeS, CH4, S0) carry an all-zero row, so the solver leaves
+             them untouched (they are handled by the kinetics, not by equilibrium).
+           - species24..species94 = the 71 secondary complexes (R1-R73; R67-R68 absent, R111 is kinetic). Each
+             is transported as its own substrate (aqueous complexes diffuse; the 8 surface complexes on SOH /
+             FesOH / ClayFe3 are immobile), so the speciation is fully self-contained in this one file.
+         KINETICS COUPLING (built into the kinetics files, nothing to switch here): with speciation ON, a
+         bucket like U6 holds the FREE ion (UO2++), while Zhao's rate laws use the TOTAL. defineKinetics.hh
+         and defineAbioticKinetics.hh now rebuild each element's TOTAL from its complex buckets before the
+         Monod/rate terms, and spread each consumption back across those buckets in proportion to content
+         (mass-conserving). They auto-detect the full network by the substrate count, so the SAME kinetics
+         files also run unchanged with equilibrium OFF. Watch the validation mass balances on the first short
+         run; the 17-component PCF convergence per voxel cannot be checked offline. -->
+    <equilibrium>
+        <enabled>true</enabled>   <!-- FULL network speciation ON -->
+        <components>Hp HCO3 Ca Mg Na K Cl SO4 HPO4 NH3 Fe2 U6 HS Ac SOH FesOH ClayFe3</components>
+        <stoichiometry>
+            <!-- columns:  Hp HCO3 Ca Mg Na  K Cl SO4 HPO4 NH3 Fe2 U6 HS Ac SOH FesOH ClayFe3 -->
+            <species0> 0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0</species0>  <!-- Ac : component -->
+            <species1> 0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0</species1>  <!-- U6 : component -->
+            <species2> 0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species2>  <!-- U4 : solid/product (inert to eq.) -->
+            <species3> 0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0  0</species3>  <!-- Fe2 : component -->
+            <species4> 0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species4>  <!-- Fe3e : solid/product (inert to eq.) -->
+            <species5> 0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species5>  <!-- Fe3m : solid/product (inert to eq.) -->
+            <species6> 0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species6>  <!-- Fe3h : solid/product (inert to eq.) -->
+            <species7> 0  0  0  0  0  0  0  1  0  0  0  0  0  0  0  0  0</species7>  <!-- SO4 : component -->
+            <species8> 0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0</species8>  <!-- HS : component -->
+            <species9> 0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species9>  <!-- FeS : solid/product (inert to eq.) -->
+            <species10> 0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species10>  <!-- HCO3 : component -->
+            <species11> 1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species11>  <!-- Hp : component -->
+            <species12> 0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species12>  <!-- CH4 : solid/product (inert to eq.) -->
+            <species13> 0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species13>  <!-- S0 : solid/product (inert to eq.) -->
+            <species14> 0  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species14>  <!-- Ca : component -->
+            <species15> 0  0  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0</species15>  <!-- Mg : component -->
+            <species16> 0  0  0  0  1  0  0  0  0  0  0  0  0  0  0  0  0</species16>  <!-- Na : component -->
+            <species17> 0  0  0  0  0  1  0  0  0  0  0  0  0  0  0  0  0</species17>  <!-- K : component -->
+            <species18> 0  0  0  0  0  0  1  0  0  0  0  0  0  0  0  0  0</species18>  <!-- Cl : component -->
+            <species19> 0  0  0  0  0  0  0  0  1  0  0  0  0  0  0  0  0</species19>  <!-- HPO4 : component -->
+            <species20> 0  0  0  0  0  0  0  0  0  1  0  0  0  0  0  0  0</species20>  <!-- NH3 : component -->
+            <species21> 0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0</species21>  <!-- SOH : component -->
+            <species22> 0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0</species22>  <!-- FesOH : component -->
+            <species23> 0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1</species23>  <!-- ClayFe3 : component -->
+            <species24> 1  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species24>  <!-- CO2 : complex -->
+            <species25>-1  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species25>  <!-- CO3_2m : complex -->
+            <species26>-1  1  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species26>  <!-- CaCO3 : complex -->
+            <species27> 0  0  1  0  0  0  1  0  0  0  0  0  0  0  0  0  0</species27>  <!-- CaCl_p : complex -->
+            <species28> 0  0  1  0  0  0  2  0  0  0  0  0  0  0  0  0  0</species28>  <!-- CaCl2 : complex -->
+            <species29> 1  0  1  0  0  0  0  0  1  0  0  0  0  0  0  0  0</species29>  <!-- CaH2PO4_p : complex -->
+            <species30> 0  1  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species30>  <!-- CaHCO3_p : complex -->
+            <species31> 0  0  1  0  0  0  0  0  1  0  0  0  0  0  0  0  0</species31>  <!-- CaHPO4 : complex -->
+            <species32>-1  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species32>  <!-- CaOH_p : complex -->
+            <species33>-1  0  1  0  0  0  0  0  1  0  0  0  0  0  0  0  0</species33>  <!-- CaPO4_m : complex -->
+            <species34>-1  1  0  0  0  0  0  0  0  0  1  0  0  0  0  0  0</species34>  <!-- FeCO3 : complex -->
+            <species35> 0  0  0  0  0  0  1  0  0  0  1  0  0  0  0  0  0</species35>  <!-- FeCl_p : complex -->
+            <species36> 0  0  0  0  0  0  2  0  0  0  1  0  0  0  0  0  0</species36>  <!-- FeCl2 : complex -->
+            <species37> 1  0  0  0  0  0  0  0  1  0  1  0  0  0  0  0  0</species37>  <!-- FeH2PO4_p : complex -->
+            <species38> 0  1  0  0  0  0  0  0  0  0  1  0  0  0  0  0  0</species38>  <!-- FeHCO3_p : complex -->
+            <species39> 0  0  0  0  0  0  0  0  1  0  1  0  0  0  0  0  0</species39>  <!-- FeHPO4 : complex -->
+            <species40>-1  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0  0</species40>  <!-- FeOH_p : complex -->
+            <species41>-1  0  0  0  0  0  0  0  1  0  1  0  0  0  0  0  0</species41>  <!-- FePO4_m : complex -->
+            <species42> 1  0  0  0  0  0  0  0  1  0  0  0  0  0  0  0  0</species42>  <!-- H2PO4_m : complex -->
+            <species43> 1  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0</species43>  <!-- H2S : complex -->
+            <species44> 2  0  0  0  0  0  0  0  1  0  0  0  0  0  0  0  0</species44>  <!-- H3PO4 : complex -->
+            <species45> 0  0  0  0  0  1  1  0  0  0  0  0  0  0  0  0  0</species45>  <!-- KCl : complex -->
+            <species46> 0  0  0  0  0  1  0  0  1  0  0  0  0  0  0  0  0</species46>  <!-- KHPO4_m : complex -->
+            <species47> 1  0  0  0  0  1  0  1  0  0  0  0  0  0  0  0  0</species47>  <!-- KHSO4 : complex -->
+            <species48> 0  0  0  0  0  1  0  1  0  0  0  0  0  0  0  0  0</species48>  <!-- KSO4_m : complex -->
+            <species49>-1  1  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0</species49>  <!-- MgCO3 : complex -->
+            <species50> 0  0  0  1  0  0  1  0  0  0  0  0  0  0  0  0  0</species50>  <!-- MgCl_p : complex -->
+            <species51> 1  0  0  1  0  0  0  0  1  0  0  0  0  0  0  0  0</species51>  <!-- MgH2PO4_p : complex -->
+            <species52> 0  1  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0</species52>  <!-- MgHCO3_p : complex -->
+            <species53> 0  0  0  1  0  0  0  0  1  0  0  0  0  0  0  0  0</species53>  <!-- MgHPO4 : complex -->
+            <species54>-1  0  0  1  0  0  0  0  1  0  0  0  0  0  0  0  0</species54>  <!-- MgPO4_m : complex -->
+            <species55> 1  0  0  0  0  0  0  0  0  1  0  0  0  0  0  0  0</species55>  <!-- NH4_p : complex -->
+            <species56> 0  0  0  0  0  0  0  0  0  1  0  0  0  1  0  0  0</species56>  <!-- NH4Ac : complex -->
+            <species57> 1  0  0  0  0  0  0  1  0  1  0  0  0  0  0  0  0</species57>  <!-- NH4SO4_m : complex -->
+            <species58>-1  1  0  0  1  0  0  0  0  0  0  0  0  0  0  0  0</species58>  <!-- NaCO3_m : complex -->
+            <species59> 0  0  0  0  1  0  1  0  0  0  0  0  0  0  0  0  0</species59>  <!-- NaCl : complex -->
+            <species60> 0  1  0  0  1  0  0  0  0  0  0  0  0  0  0  0  0</species60>  <!-- NaHCO3 : complex -->
+            <species61> 0  0  0  0  1  0  0  0  1  0  0  0  0  0  0  0  0</species61>  <!-- NaHPO4_m : complex -->
+            <species62>-1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0</species62>  <!-- OH_m : complex -->
+            <species63>-1  0  0  0  0  0  0  0  1  0  0  0  0  0  0  0  0</species63>  <!-- PO4_3m : complex -->
+            <species64>-1  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0</species64>  <!-- S_2m : complex -->
+            <species65>-2  0  0  0  0  0  0  0  0  0  0  2  0  0  0  0  0</species65>  <!-- U2OH2_2p : complex -->
+            <species66>-4  1  0  0  0  0  0  0  0  0  0  2  0  0  0  0  0</species66>  <!-- U2CO3OH3_m : complex -->
+            <species67>-1  0  0  0  0  0  0  0  0  0  0  2  0  0  0  0  0</species67>  <!-- U2OH_3p : complex -->
+            <species68>-6  6  0  0  0  0  0  0  0  0  0  3  0  0  0  0  0</species68>  <!-- U3CO36_6m : complex -->
+            <species69>-4  0  0  0  0  0  0  0  0  0  0  3  0  0  0  0  0</species69>  <!-- U3OH4_2p : complex -->
+            <species70>-5  0  0  0  0  0  0  0  0  0  0  3  0  0  0  0  0</species70>  <!-- U3OH5_p : complex -->
+            <species71>-4  1  0  0  0  0  0  0  0  0  0  3  0  0  0  0  0</species71>  <!-- U3OH5CO2_p : complex -->
+            <species72>-2  2  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0</species72>  <!-- UO2CO3_2m : complex -->
+            <species73>-3  3  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0</species73>  <!-- UO2CO3_3m : complex -->
+            <species74> 3  0  0  0  0  0  0  0  2  0  0  1  0  0  0  0  0</species74>  <!-- UO2H2PO4H3PO4_p : complex -->
+            <species75> 2  0  0  0  0  0  0  0  2  0  0  1  0  0  0  0  0</species75>  <!-- UO2H2PO42 : complex -->
+            <species76>-2  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0</species76>  <!-- UO2OH2 : complex -->
+            <species77>-3  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0</species77>  <!-- UO2OH3_m : complex -->
+            <species78>-4  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0</species78>  <!-- UO2OH4_2m : complex -->
+            <species79> 1  0  0  0  0  0  0  0  1  0  0  1  0  0  0  0  0</species79>  <!-- UO2H2PO4_p : complex -->
+            <species80> 2  0  0  0  0  0  0  0  2  0  0  1  0  0  0  0  0</species80>  <!-- UO2PO32 : complex -->
+            <species81>-1  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0</species81>  <!-- CH3COO_m : complex -->
+            <species82>-1  0  1  0  0  0  0  0  0  0  0  0  0  1  0  0  0</species82>  <!-- CaAc_p : complex -->
+            <species83>-1  0  0  0  0  0  0  0  0  0  1  0  0  1  0  0  0</species83>  <!-- FeAc_p : complex -->
+            <species84>-1  0  0  1  0  0  0  0  0  0  0  0  0  1  0  0  0</species84>  <!-- MgAc_p : complex -->
+            <species85>-1  0  0  0  1  0  0  0  0  0  0  0  0  1  0  0  0</species85>  <!-- NaAc : complex -->
+            <species86>-1  0  0  0  0  1  0  0  0  0  0  0  0  1  0  0  0</species86>  <!-- KAc : complex -->
+            <species87> 2  0  0  0  0  0  0  0  1  0  0  0  0  0  1  0  0</species87>  <!-- SH2PO4 : complex -->
+            <species88> 1  0  0  0  0  0  0  0  1  0  0  0  0  0  1  0  0</species88>  <!-- SHPO4_m : complex -->
+            <species89> 0  0  0  0  0  0  0  0  1  0  0  0  0  0  1  0  0</species89>  <!-- SPO4_2m : complex -->
+            <species90>-1  0  0  0  0  0  0  0  0  0  1  0  0  0  0  1  0</species90>  <!-- FesOFe2_p : complex -->
+            <species91>-1  0  0  0  0  0  0  0  0  0  1  0  0  0  1  0  0</species91>  <!-- SOFe_p : complex -->
+            <species92>-1  0  0  0  0  0  0  0  0  0  0  1  0  0  0  1  0</species92>  <!-- FesOUO2_p : complex -->
+            <species93> 0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0  1</species93>  <!-- FeClayFe3 : complex -->
+            <species94>-1  0  0  0  0  0  0  0  0  0  0  1  0  0  1  0  0</species94>  <!-- SOUO2 : complex -->
+        </stoichiometry>
+        <logK>
+            <species0>0</species0>  <!-- Ac -->
+            <species1>0</species1>  <!-- U6 -->
+            <species2>0</species2>  <!-- U4 -->
+            <species3>0</species3>  <!-- Fe2 -->
+            <species4>0</species4>  <!-- Fe3e -->
+            <species5>0</species5>  <!-- Fe3m -->
+            <species6>0</species6>  <!-- Fe3h -->
+            <species7>0</species7>  <!-- SO4 -->
+            <species8>0</species8>  <!-- HS -->
+            <species9>0</species9>  <!-- FeS -->
+            <species10>0</species10>  <!-- HCO3 -->
+            <species11>0</species11>  <!-- Hp -->
+            <species12>0</species12>  <!-- CH4 -->
+            <species13>0</species13>  <!-- S0 -->
+            <species14>0</species14>  <!-- Ca -->
+            <species15>0</species15>  <!-- Mg -->
+            <species16>0</species16>  <!-- Na -->
+            <species17>0</species17>  <!-- K -->
+            <species18>0</species18>  <!-- Cl -->
+            <species19>0</species19>  <!-- HPO4 -->
+            <species20>0</species20>  <!-- NH3 -->
+            <species21>0</species21>  <!-- SOH -->
+            <species22>0</species22>  <!-- FesOH -->
+            <species23>0</species23>  <!-- ClayFe3 -->
+            <species24>6.3414</species24>  <!-- CO2 -->
+            <species25>-10.3249</species25>  <!-- CO3_2m -->
+            <species26>-7.0088</species26>  <!-- CaCO3 -->
+            <species27>-0.7004</species27>  <!-- CaCl_p -->
+            <species28>-0.6535</species28>  <!-- CaCl2 -->
+            <species29>1.4</species29>  <!-- CaH2PO4_p -->
+            <species30>1.0429</species30>  <!-- CaHCO3_p -->
+            <species31>2.74</species31>  <!-- CaHPO4 -->
+            <species32>-12.85</species32>  <!-- CaOH_p -->
+            <species33>-5.8618</species33>  <!-- CaPO4_m -->
+            <species34>-5.5988</species34>  <!-- FeCO3 -->
+            <species35>-0.1649</species35>  <!-- FeCl_p -->
+            <species36>-2.4636</species36>  <!-- FeCl2 -->
+            <species37>2.7</species37>  <!-- FeH2PO4_p -->
+            <species38>2.72</species38>  <!-- FeHCO3_p -->
+            <species39>3.6</species39>  <!-- FeHPO4 -->
+            <species40>-9.5</species40>  <!-- FeOH_p -->
+            <species41>-4.3918</species41>  <!-- FePO4_m -->
+            <species42>7.2013</species42>  <!-- H2PO4_m -->
+            <species43>6.9834</species43>  <!-- H2S -->
+            <species44>9.3656</species44>  <!-- H3PO4 -->
+            <species45>-1.5004</species45>  <!-- KCl -->
+            <species46>0.78</species46>  <!-- KHPO4_m -->
+            <species47>0.8058</species47>  <!-- KHSO4 -->
+            <species48>0.875</species48>  <!-- KSO4_m -->
+            <species49>-7.3562</species49>  <!-- MgCO3 -->
+            <species50>-0.1386</species50>  <!-- MgCl_p -->
+            <species51>1.66</species51>  <!-- MgH2PO4_p -->
+            <species52>1.0329</species52>  <!-- MgHCO3_p -->
+            <species53>2.91</species53>  <!-- MgHPO4 -->
+            <species54>-5.7328</species54>  <!-- MgPO4_m -->
+            <species55>9.2418</species55>  <!-- NH4_p -->
+            <species56>4.6998</species56>  <!-- NH4Ac -->
+            <species57>0.94</species57>  <!-- NH4SO4_m -->
+            <species58>-9.8156</species58>  <!-- NaCO3_m -->
+            <species59>-0.7821</species59>  <!-- NaCl -->
+            <species60>0.1557</species60>  <!-- NaHCO3 -->
+            <species61>0.92</species61>  <!-- NaHPO4_m -->
+            <species62>-13.9911</species62>  <!-- OH_m -->
+            <species63>-12.3185</species63>  <!-- PO4_3m -->
+            <species64>-12.9418</species64>  <!-- S_2m -->
+            <species65>-5.6349</species65>  <!-- U2OH2_2p -->
+            <species66>-11.2229</species66>  <!-- U2CO3OH3_m -->
+            <species67>-2.7072</species67>  <!-- U2OH_3p -->
+            <species68>-8.1091</species68>  <!-- U3CO36_6m -->
+            <species69>-11.929</species69>  <!-- U3OH4_2p -->
+            <species70>-15.5889</species70>  <!-- U3OH5_p -->
+            <species71>-9.6194</species71>  <!-- U3OH5CO2_p -->
+            <species72>-3.7613</species72>  <!-- UO2CO3_2m -->
+            <species73>-9.453</species73>  <!-- UO2CO3_3m -->
+            <species74>22.7537</species74>  <!-- UO2H2PO4H3PO4_p -->
+            <species75>21.7437</species75>  <!-- UO2H2PO42 -->
+            <species76>-10.3146</species76>  <!-- UO2OH2 -->
+            <species77>-19.2218</species77>  <!-- UO2OH3_m -->
+            <species78>-33.0291</species78>  <!-- UO2OH4_2m -->
+            <species79>11.6719</species79>  <!-- UO2H2PO4_p -->
+            <species80>16.2636</species80>  <!-- UO2PO32 -->
+            <species81>-4.7516</species81>  <!-- CH3COO_m -->
+            <species82>-3.8239</species82>  <!-- CaAc_p -->
+            <species83>-3.4643</species83>  <!-- FeAc_p -->
+            <species84>-3.4749</species84>  <!-- MgAc_p -->
+            <species85>-4.8583</species85>  <!-- NaAc -->
+            <species86>-5.0192</species86>  <!-- KAc -->
+            <species87>18.0756</species87>  <!-- SH2PO4 -->
+            <species88>11.7756</species88>  <!-- SHPO4_m -->
+            <species89>4.2256</species89>  <!-- SPO4_2m -->
+            <species90>-3.3</species90>  <!-- FesOFe2_p -->
+            <species91>-3.3</species91>  <!-- SOFe_p -->
+            <species92>0.25</species92>  <!-- FesOUO2_p -->
+            <species93>-3</species93>  <!-- FeClayFe3 -->
+            <species94>0.25</species94>  <!-- SOUO2 -->
+        </logK>
+    </equilibrium>
+
+    <IO>
+        <read_NS_file>false</read_NS_file>        <!-- solve flow fresh -->
+        <read_ADE_file>false</read_ADE_file>      <!-- start chemistry fresh -->
+        <ns_filename>nsLattice</ns_filename>
+        <mask_filename>maskLattice</mask_filename>
+        <subs_filename>subsLattice</subs_filename>
+        <bio_filename>bioLattice</bio_filename>
+        <save_VTK_interval>2000</save_VTK_interval>   <!-- full 3D snapshot every 5000 steps -->
+        <save_CHK_interval>50000</save_CHK_interval>  <!-- restart checkpoint -->
+        <debug_updRxn>0</debug_updRxn> <!-- 1 = print [UPD_RXN] debug lines; 0 = clean output (default) -->
+    </IO>
+</parameters>

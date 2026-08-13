@@ -1,0 +1,293 @@
+<?xml version="1.0" ?>
+<!-- =========================================================================
+     CompLB3D  |  FLUX BALANCE ANALYSIS VERIFICATION CASE  (COBRApy)
+     =========================================================================
+
+     WHAT THIS IS
+
+     The 3D version of the two-species verification case from CompLaB 2D
+     (example/indimeshComparison/sim1).  Two bacteria that cannot grow alone:
+
+         E. coli K-12          eats lactose, excretes acetate,
+                               CANNOT make its own methionine
+         S. enterica LT2       eats acetate, excretes methionine,
+                               CANNOT eat lactose
+
+     Neither survives on its own.  Together each supplies what the other is
+     missing, and their biomass settles at a fixed ratio.  That ratio is the
+     thing being verified: it should come out the same regardless of how the two
+     are arranged in space, because it is set by the metabolic stoichiometry of
+     the two genome-scale models, not by the geometry.
+
+     This is the natural regression test for the flux balance analysis solver,
+     because the expected answer comes from published 2D results rather than
+     from this code.
+
+     WHY IT IS QUASI-2D
+
+     The domain is the original 25 x 25 mesh extruded 5 voxels deep in z, and z
+     is periodic.  Every z-plane therefore sees identical conditions, and the
+     3D answer must reproduce the 2D answer.  That is the point: any difference
+     is a bug in the 3D port, not new physics.  Once it passes, thicken z or
+     change the geometry to make it genuinely three-dimensional.
+
+     There is no flow (<Peclet>0</Peclet>), so this exercises the reaction and
+     diffusion path only - deliberately, so a failure points at the flux
+     balance coupling and not at the Navier-Stokes solver.
+
+     THIS IS THE COBRApy TWIN OF CompLaB.xml
+
+     Same domain, same geometry, same models, same numbers.  The ONLY
+     differences are the two solver switches and the two reaction_type lines,
+     so the two files are a direct cross-check: GLPK and COBRApy are solving
+     the identical linear programme and must return the same biomass ratio.
+     If they disagree, one of the two couplings is wrong.
+
+     Note that COBRApy does NOT read the SBML model itself.  It receives the
+     same input/*_rGEM_c.xml stoichiometry that GLPK receives, and rebuilds a
+     cobra.Model in memory from it at start-up.  Both solvers therefore depend
+     on extractMM.py having produced those files.
+
+     Expect this to run one to two orders of magnitude slower than the GLPK
+     twin: cobra rebuilds the problem through optlang on every optimize()
+     call, whereas GLPK only resets column bounds on a persistent problem.
+
+     HOW TO RUN IT
+
+       1. Install cobrapy in the Python that CompLB3D will link against:
+              python3 -m pip install cobrapy
+       2. Build with Python:    cmake -DENABLE_COBRAPY=ON ..  &&  make
+       3. src/complab3d_cobrapy.py must be on disk next to the executable, at
+          the <src_path> below.  It is imported BY NAME at run time, not
+          compiled in.  Deleting it breaks the run at start-up.
+       4. Put this file and the input/ folder next to the complab executable
+       5. Rename it to CompLaB.xml, or point the executable at it
+       6. ./complab       (or  srun ./complab  on the cluster)
+
+     WHAT TO LOOK FOR
+
+       - "[OK] XML configuration loaded and validated"
+       - the metabolic layer summary showing 2 COBRApy microbes
+       - both models loading with their metabolite/reaction counts
+       - biomass of both species growing, then their ratio going flat
+       - no "[NEG!]" concentration warnings
+
+     Compare the final E. coli : S. enterica biomass ratio against BOTH the 2D
+     result and the GLPK twin in CompLaB.xml.
+     ========================================================================= -->
+<parameters>
+
+    <path>
+        <src_path>src</src_path>
+        <input_path>input</input_path>
+        <output_path>output</output_path>
+    </path>
+
+    <simulation_mode>
+        <biotic_mode>true</biotic_mode>
+
+        <!-- Hand-written kinetics OFF: all the biology here comes from the two
+             metabolic models.  defineKinetics.hh as shipped expects the
+             95-substrate uranium network and would read past the end of a
+             4-substrate array, so leave this off for this case. -->
+        <enable_kinetics>false</enable_kinetics>
+        <enable_abiotic_kinetics>false</enable_abiotic_kinetics>
+
+        <!-- The whole point of this case. -->
+        <enable_fba_glpk>false</enable_fba_glpk>
+        <enable_fba_cobrapy>true</enable_fba_cobrapy>
+        <enable_surrogate>false</enable_surrogate>
+
+        <!-- No speciation in this case, so free and total are identical. -->
+        <fba_concentration_basis>free</fba_concentration_basis>
+        <!-- glpk_lpsolver is a GLPK-only setting; it is ignored here. -->
+
+        <enable_validation_diagnostics>false</enable_validation_diagnostics>
+    </simulation_mode>
+
+    <LB_numerics>
+        <domain>
+            <nx>25</nx>
+            <ny>25</ny>
+            <nz>5</nz>                             <!-- extrusion depth; z is periodic -->
+            <dx>500</dx>
+            <unit>um</unit>
+            <characteristic_length>100</characteristic_length>
+            <filename>geometry.dat</filename>
+            <material_numbers>
+                <pore>2</pore>
+                <solid>0</solid>
+                <bounce_back>1</bounce_back>
+                <!-- Where each species is seeded.  Swapping these two lines is
+                     what the original sim1..sim6 series varied: the converged
+                     ratio must not care. -->
+                <microbe0>8</microbe0>              <!-- E. coli -->
+                <microbe1>3 4</microbe1>            <!-- S. enterica -->
+            </material_numbers>
+        </domain>
+
+        <delta_P>1e-6</delta_P>
+        <Peclet>0</Peclet>                          <!-- no flow: diffusion and reaction only -->
+        <tau>0.8</tau>
+        <track_performance>false</track_performance>
+
+        <iteration>
+            <ns_max_iT1>1000000</ns_max_iT1>
+            <ns_max_iT2>100000</ns_max_iT2>
+            <ns_converge_iT1>1e-8</ns_converge_iT1>
+            <ns_converge_iT2>1e-4</ns_converge_iT2>
+            <ns_update_interval>10</ns_update_interval>
+            <ade_update_interval>1</ade_update_interval>
+            <ade_max_iT>3456</ade_max_iT>           <!-- same horizon as the 2D case -->
+            <ade_converge_iT>1e-8</ade_converge_iT>
+        </iteration>
+    </LB_numerics>
+
+    <chemistry>
+        <number_of_substrates>4</number_of_substrates>
+
+        <!-- Held fixed: oxygen and lactose are treated as an inexhaustible
+             reservoir, so the mutualism is not limited by running out of them. -->
+        <fix_concentration>no yes no yes</fix_concentration>
+        <fix_lower_bounds>no yes no yes</fix_lower_bounds>
+
+        <substrate0>                                <!-- C0 acetate: E. coli makes it, S. enterica eats it -->
+            <name_of_substrates>acetate</name_of_substrates>
+            <initial_concentration>0.5</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>5e-10</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <left_boundary_condition>0.1</left_boundary_condition>
+            <right_boundary_type>Dirichlet</right_boundary_type>
+            <right_boundary_condition>0.</right_boundary_condition>
+        </substrate0>
+
+        <substrate1>                                <!-- C1 oxygen: held fixed -->
+            <name_of_substrates>oxygen</name_of_substrates>
+            <initial_concentration>0.25</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>5e-10</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <left_boundary_condition>0.</left_boundary_condition>
+            <right_boundary_type>Dirichlet</right_boundary_type>
+            <right_boundary_condition>0.</right_boundary_condition>
+        </substrate1>
+
+        <substrate2>                                <!-- C2 methionine: S. enterica makes it, E. coli needs it -->
+            <name_of_substrates>methionine</name_of_substrates>
+            <initial_concentration>0.</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>5e-10</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <left_boundary_condition>0.</left_boundary_condition>
+            <right_boundary_type>Dirichlet</right_boundary_type>
+            <right_boundary_condition>0.</right_boundary_condition>
+        </substrate2>
+
+        <substrate3>                                <!-- C3 lactose: only E. coli can use it; held fixed -->
+            <name_of_substrates>lactose</name_of_substrates>
+            <initial_concentration>2.92</initial_concentration>
+            <substrate_diffusion_coefficients><in_pore>5e-10</in_pore><in_biofilm>5e-10</in_biofilm></substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <left_boundary_condition>0.</left_boundary_condition>
+            <right_boundary_type>Dirichlet</right_boundary_type>
+            <right_boundary_condition>0.</right_boundary_condition>
+        </substrate3>
+    </chemistry>
+
+    <microbiology>
+        <number_of_microbes>2</number_of_microbes>
+        <maximum_biomass_density>100</maximum_biomass_density>
+        <thrd_biofilm_fraction>0.01</thrd_biofilm_fraction>
+        <CA_method>fraction</CA_method>
+
+        <microbe0>
+            <name_of_microbes>E.coli</name_of_microbes>
+            <solver_type>FD</solver_type>
+            <reaction_type>cobrapy</reaction_type>
+            <model_filename>iJO1366_rGEM_c</model_filename>
+            <initial_densities>2.4</initial_densities>
+            <decay_coefficient>0.01</decay_coefficient>
+            <viscosity_ratio_in_biofilm>0</viscosity_ratio_in_biofilm>
+            <biomass_diffusion_coefficients><in_pore>3e-13</in_pore><in_biofilm>3e-13</in_biofilm></biomass_diffusion_coefficients>
+
+            <half_saturation_constants>0.01 0.01 0.01 0.01</half_saturation_constants>
+
+            <!-- Which reaction in iJO1366 exchanges each substrate, in substrate
+                 order (acetate, oxygen, methionine, lactose).  Use -1 for a
+                 substrate this organism does not exchange. -->
+            <exchange_reaction_indices>6 55 418 421</exchange_reaction_indices>
+
+            <!-- Michaelis-Menten Vmax, mmol/gDW/h, one per substrate.
+                 0 = no enzyme limit for that substrate (supply-limited instead). -->
+            <fba_maximum_uptake_flux>15. 25. 8. 8.</fba_maximum_uptake_flux>
+
+            <!-- Hard floor and ceiling on the exchange fluxes.  Exchange
+                 reactions are written "metabolite ->", so eating is negative. -->
+            <substrate_lower_bounds>-15. -25. -8. -8.</substrate_lower_bounds>
+            <substrate_upper_bounds>60. 60. 60. 60.</substrate_upper_bounds>
+
+            <objective_direction>maximize</objective_direction>
+
+            <!-- grams dry weight per mole of cells; converts CompLB3D's mol/L
+                 biomass into the gDW/L a metabolic model expects. -->
+            <biomass_molar_mass>24.6</biomass_molar_mass>
+
+            <left_boundary_type>Neumann</left_boundary_type>
+            <left_boundary_condition>0.</left_boundary_condition>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <right_boundary_condition>0.</right_boundary_condition>
+        </microbe0>
+
+        <microbe1>
+            <name_of_microbes>S.Enterica</name_of_microbes>
+            <solver_type>FD</solver_type>
+            <reaction_type>cobrapy</reaction_type>
+            <model_filename>iRR1083_rGEM_c</model_filename>
+            <initial_densities>2.4 4.8</initial_densities>
+            <decay_coefficient>0.01</decay_coefficient>
+            <viscosity_ratio_in_biofilm>0</viscosity_ratio_in_biofilm>
+            <biomass_diffusion_coefficients><in_pore>3e-13</in_pore><in_biofilm>3e-13</in_biofilm></biomass_diffusion_coefficients>
+
+            <half_saturation_constants>0.01 0.01 0.01 0</half_saturation_constants>
+
+            <!-- -1 on lactose: S. enterica cannot use it.  That single -1 is
+                 what makes the mutualism obligate. -->
+            <exchange_reaction_indices>71 104 99 -1</exchange_reaction_indices>
+
+            <fba_maximum_uptake_flux>15. 25. 8. 0</fba_maximum_uptake_flux>
+            <substrate_lower_bounds>-15. -25. -8. 0</substrate_lower_bounds>
+            <substrate_upper_bounds>100. 100. 100. 0</substrate_upper_bounds>
+
+            <objective_direction>maximize</objective_direction>
+            <biomass_molar_mass>24.6</biomass_molar_mass>
+
+            <left_boundary_type>Neumann</left_boundary_type>
+            <left_boundary_condition>0.</left_boundary_condition>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <right_boundary_condition>0.</right_boundary_condition>
+        </microbe1>
+    </microbiology>
+
+    <equilibrium>
+        <enabled>false</enabled>
+    </equilibrium>
+
+    <precipitation>
+        <enabled>false</enabled>
+    </precipitation>
+
+    <dissolution>
+        <enabled>false</enabled>
+    </dissolution>
+
+    <IO>
+        <read_NS_file>false</read_NS_file>
+        <read_ADE_file>false</read_ADE_file>
+        <ns_filename>nsLattice</ns_filename>
+        <mask_filename>maskLattice</mask_filename>
+        <subs_filename>subsLattice</subs_filename>
+        <bio_filename>bioLattice</bio_filename>
+        <save_VTK_interval>500</save_VTK_interval>
+        <save_CHK_interval>10000</save_CHK_interval>
+        <debug_updRxn>0</debug_updRxn>
+    </IO>
+
+</parameters>

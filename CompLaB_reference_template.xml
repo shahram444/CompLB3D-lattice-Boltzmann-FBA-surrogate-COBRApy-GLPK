@@ -1,0 +1,670 @@
+<?xml version="1.0" ?>
+<!-- =========================================================================
+     CompLB3D  |  REFERENCE INPUT FILE
+     =========================================================================
+
+     This file is a TEMPLATE and a REFERENCE.  It lists every setting CompLB3D
+     understands, says what each one does, gives its units and its default, and
+     is set up as a small run that works out of the box.
+
+     It is deliberately NOT a scientific example.  The uranium bioremediation
+     case that used to live here has been moved to
+
+         CompLaB_example_uranium_zhao.xml
+
+     and is still complete and runnable - copy it over this file if that is the
+     case you want.
+
+     =========================================================================
+     HOW TO READ THIS FILE
+
+       A setting is a labelled box:  <name>value</name>  means "name = value".
+       Boxes inside boxes group related settings.
+
+       A COMMENT is a note for humans and the solver ignores it.  It opens with
+       an angle bracket, an exclamation mark and two dashes, and closes with two
+       dashes and an angle bracket.  This whole guide is one comment.
+
+       CompLB3D reads this file from the directory you launch it in, and reads
+       it by NAME: it must be called CompLaB.xml.
+
+     =========================================================================
+     UNITS - one convention, used everywhere
+
+       lengths          micrometres by default (set <unit>)
+       concentrations   mol/L
+       biomass          mol/L   - the same unit as the chemicals, on purpose
+       time             seconds
+       diffusivities    m^2/s
+       rate constants   per second   (they live in the .hh files, not here)
+
+       Flux balance analysis is the one exception: it works internally in
+       mmol per gram dry weight per hour, because that is what every published
+       metabolic model uses.  CompLB3D converts at the boundary of the linear
+       program using each microbe's <biomass_molar_mass>, and nowhere else.
+       You never write mmol/gDW/h anywhere except <maximum_uptake_flux>.
+
+     =========================================================================
+     WHAT THIS TEMPLATE RUNS AS SHIPPED
+
+       Flow plus transport of three tracers, no reactions.  That is a genuine,
+       useful first run: it tells you the geometry loads, the flow converges,
+       the Peclet auto-calibration works and the boundary conditions behave,
+       before any chemistry can confuse the picture.
+
+       To add chemistry, turn on ONE of the four reaction paths in
+       <simulation_mode> below and read the note attached to it.  They can be
+       combined; each note says what it needs from you first.
+
+     =========================================================================
+     WHAT YOU MUST SUPPLY
+
+       input/geometry.dat   an ASCII list of material numbers, one per voxel,
+                            written in x-slices: for each x from 1 to nx-2, all
+                            (y,z) values.  The numbers are the ones you define
+                            in <material_numbers> below.
+     ========================================================================= -->
+<parameters>
+
+    <!-- ====================================================================
+         WHERE THINGS LIVE
+         ==================================================================== -->
+    <path>
+        <src_path>src</src_path>          <!-- source folder; also where Python looks for
+                                               complab3d_cobrapy.py.  default: src        -->
+        <input_path>input</input_path>    <!-- geometry.dat and any metabolic model XMLs.
+                                               default: input                             -->
+        <output_path>output</output_path> <!-- results are written here; created if absent.
+                                               default: output                            -->
+    </path>
+
+
+    <!-- ====================================================================
+         MASTER SWITCHES  -  what physics is active
+         ====================================================================
+         Everything here is a plain on/off.  Accepted spellings for "on":
+         true, yes, 1, on.  Anything else is off.
+         ==================================================================== -->
+    <simulation_mode>
+
+        <!-- Are there microbes at all?  false skips the whole microbiology
+             section and runs pure chemistry.        default: true             -->
+        <biotic_mode>true</biotic_mode>
+
+        <!-- Hand-written biological rate laws from defineKinetics.hh.
+             default: true
+
+             BEFORE YOU TURN THIS ON: defineKinetics.hh as shipped is written
+             for the 95-substrate uranium network and indexes C[0] .. C[86] by
+             hard-coded position.  With the 3 substrates below it would read
+             past the end of the array.  Either edit defineKinetics.hh to match
+             your substrate list, or leave this off.                           -->
+        <enable_kinetics>false</enable_kinetics>
+
+        <!-- Chemical rate laws with no microbe involved (mineral reactions,
+             redox, sorption) from defineAbioticKinetics.hh.   default: false
+             Same warning as above: the shipped file expects the uranium
+             substrate list.                                                   -->
+        <enable_abiotic_kinetics>false</enable_abiotic_kinetics>
+
+        <!-- ================================================================
+             THE OPTIONAL METABOLIC LAYER
+             ================================================================
+             Three ways to let a genome-scale metabolic model decide how fast
+             an organism grows and what it eats, instead of writing the rate
+             law by hand.  All three are off by default and cost nothing when
+             off.
+
+             Each one ALSO has to be built into the program.  If you switch one
+             on here and the program was compiled without it, CompLB3D stops at
+             start-up and tells you which build option to turn on - it will not
+             quietly ignore you.
+
+                 GLPK      cmake -DENABLE_GLPK=ON ..
+                 COBRApy   cmake -DENABLE_COBRAPY=ON ..
+                 surrogate always available
+             ================================================================ -->
+
+        <!-- Flux balance analysis solved by GLPK.  Fast, in-process, no Python.
+             This is the one to use for production runs.        default: false
+             NEEDS: <model_filename>, <exchange_reaction_indices> and
+                    <biomass_molar_mass> on each FBA microbe, plus a metabolic
+                    model XML in input/ produced by  python3 extractMM.py       -->
+        <enable_fba_glpk>false</enable_fba_glpk>
+
+        <!-- The same analysis solved by COBRApy in an embedded Python.  Slower
+             - typically one to two orders of magnitude - but it accepts the
+             cobra ecosystem directly.  Useful for cross-checking GLPK results.
+             default: false
+             GLPK and COBRApy microbes cannot be mixed in one run.             -->
+        <enable_fba_cobrapy>false</enable_fba_cobrapy>
+
+        <!-- A pre-trained stand-in for flux balance analysis, defined in
+             surrogateModel.hh.  Cheapest of the three, and only trustworthy
+             inside the range of conditions it was trained on.  default: false -->
+        <enable_surrogate>false</enable_surrogate>
+
+        <!-- Which concentration the uptake bounds see when the equilibrium
+             solver is on:
+
+               free    the substrate lattice value as-is.  Reproduces CompLaB
+                       2D exactly.                                  (default)
+               total   the component plus every complex that carries it,
+                       rebuilt from the <equilibrium> tableau, with consumption
+                       drawn back down across the complexes in proportion.
+
+             With <equilibrium> off the two are identical, because every
+             substrate is then already its own total.  With speciation ON,
+             "total" is almost certainly the physically correct choice: "free"
+             will understate the available substrate, sometimes by a lot.      -->
+        <fba_concentration_basis>free</fba_concentration_basis>
+
+        <!-- Which GLPK algorithm.  1 = simplex (default and recommended),
+             2 = interior point, 3 = exact rational arithmetic.  Leave at 1
+             unless you have a specific reason.                                -->
+        <glpk_lpsolver>1</glpk_lpsolver>
+
+        <!-- Debugging only: dump each microbe's linear program to a file at
+             start-up.  0 = off (default), 1 = .lp, 2 or 3 = .mps              -->
+        <glpk_save_problem>0</glpk_save_problem>
+
+        <!-- Per-iteration mass-balance and progress printing.  Verbose.
+             default: false                                                    -->
+        <enable_validation_diagnostics>false</enable_validation_diagnostics>
+
+    </simulation_mode>
+
+
+    <!-- ====================================================================
+         THE GRID, THE FLOW, AND HOW LONG TO RUN
+         ==================================================================== -->
+    <LB_numerics>
+
+        <domain>
+            <nx>64</nx>          <!-- voxels along x; flow runs in +x.  REQUIRED -->
+            <ny>32</ny>          <!-- voxels along y.                   REQUIRED -->
+            <nz>32</nz>          <!-- voxels along z.                   REQUIRED -->
+            <dx>2.0</dx>         <!-- voxel edge length, in <unit>.     REQUIRED -->
+            <unit>um</unit>      <!-- m, mm or um.            default: um       -->
+
+            <!-- The pore size that sets the Peclet number, in the same <unit>.
+                 For a duct, the open width.  For a packing, a typical pore
+                 throat.  REQUIRED whenever <Peclet> is nonzero.               -->
+            <characteristic_length>24</characteristic_length>
+
+            <!-- Material map, read from <input_path>.        REQUIRED         -->
+            <filename>geometry.dat</filename>
+
+            <material_numbers>
+                <pore>2</pore>              <!-- open fluid.        default: 2  -->
+                <solid>0</solid>            <!-- grain interior; no dynamics at
+                                                 all.               default: 0  -->
+                <bounce_back>1</bounce_back><!-- no-slip wall.      default: 1  -->
+
+                <!-- One <microbeN> tag per ATTACHED microbe, giving the
+                     material number its biofilm occupies.  A microbe with NO
+                     tag here is treated as planktonic (free-floating) and is
+                     advected with the flow instead.
+
+                     This is the switch that decides attached versus suspended.
+                     Several microbes may share a number.                      -->
+                <microbe0>3</microbe0>
+                <!-- microbe1 has no tag on purpose: it is the planktonic pool. -->
+            </material_numbers>
+        </domain>
+
+        <!-- Pressure drop across the domain, in lattice units.  This is only a
+             SEED: if <Peclet> is nonzero the solver measures the permeability,
+             works out the pressure drop that hits your target Peclet, and
+             re-solves.  Start small so the first solve is stable.
+             default: 0 (no flow - pure diffusion)                            -->
+        <delta_P>1.5e-4</delta_P>
+
+        <!-- Target Peclet number: advection divided by diffusion, on the
+             characteristic length.  1 means the two are comparable.  Set 0 for
+             a diffusion-only run, which also skips the flow solver entirely.
+             default: 0                                                        -->
+        <Peclet>1.0</Peclet>
+
+        <!-- Lattice-Boltzmann relaxation time for the FLOW.  Sets the model
+             viscosity through nu = (tau - 0.5)/3.  Stay inside 0.5 < tau < 2.
+             default: 0.8                                                      -->
+        <tau>0.8</tau>
+
+        <!-- Time the solver kernels instead of writing output.  Turning this on
+             suppresses ALL VTI and checkpoint writing.       default: false   -->
+        <track_performance>false</track_performance>
+
+        <iteration>
+            <ns_max_iT1>100000</ns_max_iT1>       <!-- flow solver step cap, first solve.  default: 100000 -->
+            <ns_max_iT2>100000</ns_max_iT2>       <!-- ... and for later re-solves.        default: 100000 -->
+            <ns_converge_iT1>1e-8</ns_converge_iT1> <!-- "flow is steady" tolerance, first. default: 1e-8  -->
+            <ns_converge_iT2>1e-6</ns_converge_iT2> <!-- ... later.                         default: 1e-6  -->
+            <ns_update_interval>1</ns_update_interval>  <!-- re-solve the flow at most every
+                                                             N reaction steps.  default: 1  -->
+            <ade_update_interval>1</ade_update_interval><!-- refresh diffusivities at most
+                                                             every N steps.     default: 1  -->
+            <ade_max_iT>20000</ade_max_iT>        <!-- reaction/transport steps to run.    default: 1e7 -->
+            <ade_converge_iT>1e-8</ade_converge_iT> <!-- parsed but not currently used: there
+                                                         is no transport convergence test.          -->
+        </iteration>
+    </LB_numerics>
+
+
+    <!-- ====================================================================
+         THE CHEMICALS
+         ====================================================================
+         One <substrateN> block per chemical, numbered from 0 with no gaps.
+         The ORDER fixes the C[] indices that defineKinetics.hh and
+         <exchange_reaction_indices> refer to, so do not reorder casually.
+         ==================================================================== -->
+    <chemistry>
+
+        <number_of_substrates>3</number_of_substrates>   <!-- REQUIRED -->
+
+        <!-- Optional, one flag per substrate, only meaningful when an FBA
+             solver is on:
+               fix_concentration  hold this substrate at its current value; the
+                                  reaction increment is computed but not applied
+               fix_lower_bounds   clamp the uptake bound to exactly minus the
+                                  local concentration
+             Omit both unless you know you need them.                          -->
+        <!-- <fix_concentration>0 0 0</fix_concentration>   -->
+        <!-- <fix_lower_bounds>0 0 0</fix_lower_bounds>     -->
+
+        <substrate0>
+            <name_of_substrates>acetate</name_of_substrates>  <!-- used for the VTI file
+                                                                   names and for matching
+                                                                   equilibrium components -->
+            <initial_concentration>0.0</initial_concentration><!-- mol/L.     default: 0  -->
+
+            <substrate_diffusion_coefficients>
+                <in_pore>1.0e-9</in_pore>       <!-- m^2/s in open water.  default: 1e-9  -->
+                <in_biofilm>2.0e-10</in_biofilm><!-- m^2/s inside biofilm. default: 2e-10 -->
+            </substrate_diffusion_coefficients>
+
+            <!-- Dirichlet = hold this value fixed here (use it to inject).
+                 Neumann   = free outflow, nothing imposed.
+                 Both types are REQUIRED; the values default to 0.             -->
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <left_boundary_condition>5.0e-3</left_boundary_condition>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <right_boundary_condition>0.0</right_boundary_condition>
+
+            <!-- <immobile>true</immobile> marks a solid phase: it never
+                 advects, diffuses, streams or collides, it only accumulates its
+                 reaction term in place.  Use it for minerals and precipitates.
+                 default: false                                                -->
+        </substrate0>
+
+        <substrate1>
+            <name_of_substrates>sulfate</name_of_substrates>
+            <initial_concentration>1.0e-3</initial_concentration>
+            <substrate_diffusion_coefficients>
+                <in_pore>1.0e-9</in_pore><in_biofilm>5.0e-10</in_biofilm>
+            </substrate_diffusion_coefficients>
+            <left_boundary_type>Dirichlet</left_boundary_type>
+            <left_boundary_condition>1.0e-3</left_boundary_condition>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate1>
+
+        <substrate2>
+            <name_of_substrates>sulfide</name_of_substrates>
+            <initial_concentration>0.0</initial_concentration>
+            <substrate_diffusion_coefficients>
+                <in_pore>1.5e-9</in_pore><in_biofilm>7.5e-10</in_biofilm>
+            </substrate_diffusion_coefficients>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </substrate2>
+
+    </chemistry>
+
+
+    <!-- ====================================================================
+         THE MICROBES
+         ====================================================================
+         One <microbeN> block per pool, numbered from 0 with no gaps.
+         ==================================================================== -->
+    <microbiology>
+
+        <number_of_microbes>2</number_of_microbes>   <!-- REQUIRED -->
+
+        <!-- How much biomass fills one voxel completely, mol/L.  Attached
+             biomass above this spills into neighbouring voxels.
+             REQUIRED when any microbe uses the CA solver.                     -->
+        <maximum_biomass_density>1.0e-4</maximum_biomass_density>
+
+        <!-- Fraction of that maximum at which a pore voxel starts counting as
+             biofilm (and starts resisting flow).  REQUIRED with CA.           -->
+        <thrd_biofilm_fraction>0.1</thrd_biofilm_fraction>
+
+        <!-- How spilling works:
+               fraction  move only the excess above the maximum   (recommended)
+               half      move half the voxel's total biomass - more aggressive,
+                         and note it moves half the TOTAL, not half the excess
+             default: fraction                                                 -->
+        <CA_method>fraction</CA_method>
+
+        <microbe0>
+            <name_of_microbes>attached_SRB</name_of_microbes>
+
+            <!-- How this pool moves:
+                   CA   attached biofilm, spreads by cellular automaton
+                   FD   attached, spreads by finite-difference diffusion
+                        (NOTE: this path is not exercised by any shipped case;
+                         verify it on a small run before relying on it)
+                   LBM  planktonic, advected and diffused with the flow
+                 REQUIRED                                                      -->
+            <solver_type>CA</solver_type>
+
+            <!-- What decides this pool's growth and consumption:
+                   none                    no reaction
+                   kinetics                defineKinetics.hh        (default)
+                   glpk                    flux balance via GLPK
+                   cobrapy                 flux balance via COBRApy
+                   surrogate               surrogateModel.hh
+                   glpk_and_kinetics       both, added together
+                   cobrapy_and_kinetics    both
+                   surrogate_and_kinetics  both
+                 Whatever you pick must also be switched on in
+                 <simulation_mode> above.                                      -->
+            <reaction_type>none</reaction_type>
+
+            <initial_densities>1.0e-6</initial_densities>  <!-- mol/L.  REQUIRED -->
+            <decay_coefficient>6.94e-8</decay_coefficient> <!-- 1/s.    default: 0
+
+                 Also used as the fallback when an FBA solve returns no growth:
+                 the organism then decays at this rate instead.                -->
+
+            <!-- How much more resistant to flow the biofilm is than open pore.
+                 10 means ten times.  0 means the biofilm is a solid wall.
+                 REQUIRED for CA microbes.                                     -->
+            <viscosity_ratio_in_biofilm>10.0</viscosity_ratio_in_biofilm>
+
+            <!-- Half-saturation constants, mol/L, ONE PER SUBSTRATE in
+                 substrate order.  Used by the FBA and surrogate paths to build
+                 the Monod uptake bound  Vmax * C / (Kc + C).  Put 0 where the
+                 organism does not use that substrate.                         -->
+            <half_saturation_constants>7.0e-5 2.0e-4 0</half_saturation_constants>
+
+            <!-- Michaelis-Menten Vmax: the maximum uptake rate, in mmol per gram
+                 dry weight per hour, ONE PER SUBSTRATE in substrate order.  This
+                 is the only place that unit appears in the whole file.
+
+                 The FBA and surrogate solvers build the uptake bound as
+                     Vmax * C / (Kc + C)
+                 using this and <half_saturation_constants> above.
+
+                 A zero means "no enzyme limit" for that substrate: the bound
+                 then becomes whatever flux would exactly exhaust the local
+                 supply in one time step, i.e. the organism is supply-limited
+                 rather than enzyme-limited.
+
+                 Required for glpk / cobrapy / surrogate reaction types.  Must
+                 have exactly <number_of_substrates> entries - a short list is
+                 rejected at start-up rather than silently padded.              -->
+            <maximum_uptake_flux>0 0 0</maximum_uptake_flux>
+
+            <!-- NOTE: <maximum_uptake_flux> above is ALSO read by the kinetics path
+                 (defineKinetics.hh), where it means mol substrate per mol cells per
+                 second, not mmol/gDW/h.  If a microbe uses BOTH kinetics and a
+                 metabolic solver, give the metabolic solver its own tag so the two
+                 do not have to share one number:
+                 <fba_maximum_uptake_flux>10.0 0.5 0</fba_maximum_uptake_flux>      -->
+
+            <left_boundary_type>Neumann</left_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <right_boundary_condition>0.0</right_boundary_condition>
+
+            <!-- ============================================================
+                 THE REST OF THIS BLOCK IS ONLY READ WHEN <reaction_type>
+                 IS AN FBA OR SURROGATE TYPE.  Left commented out here because
+                 this template ships with reactions off.
+                 ============================================================
+
+            Grams dry weight per mole of cells.  This is the number that
+            converts CompLB3D's mol/L biomass into the gDW/L a metabolic model
+            expects, and it is applied at exactly one place in the code.
+            24.6 is the usual CH1.8O0.5N0.2 formula weight.   default: 24.6
+            <biomass_molar_mass>24.6</biomass_molar_mass>
+
+            Metabolic model, without the .xml, read from <input_path>.
+            Produce it with:   python3 extractMM.py my_model.sbml
+            REQUIRED for glpk and cobrapy.
+            <model_filename>iAF987_mm</model_filename>
+
+            Which reaction in that model exchanges each substrate, ONE PER
+            SUBSTRATE in substrate order, using -1 for substrates this organism
+            does not exchange.  REQUIRED for glpk and cobrapy.
+            Get the indices from extractMM.py's report.
+            <exchange_reaction_indices>62 121 -1</exchange_reaction_indices>
+
+            Hard floor and ceiling on those exchange fluxes, mmol/gDW/h, one per
+            substrate.  Exchange reactions are written as "metabolite ->", so
+            eating is NEGATIVE and excreting is positive.
+
+            These are a CLAMP, not a rate.  The Michaelis-Menten Vmax comes from
+            <maximum_uptake_flux> above; these two just stop the solver going
+            outside a range you consider physical, whatever the Monod bound says.
+            Both lists, if given, must have exactly <number_of_substrates>
+            entries.
+            <substrate_lower_bounds>-100 -100 0</substrate_lower_bounds>
+            <substrate_upper_bounds>0 0 1000</substrate_upper_bounds>
+
+            maximize or minimize the model's objective.  default: maximize
+            <objective_direction>maximize</objective_direction>
+
+            Force the upper bound equal to the lower bound, pinning each
+            exchange flux to exactly the Monod rate instead of letting the
+            solver choose anything up to it.   default: no
+            <equate_bounds>no</equate_bounds>
+
+            Extra bound overrides applied to the model once at load time -
+            for knocking a reaction out, or forcing one on.  The three lists
+            must be the same length.
+            <constraint_indices>310 452</constraint_indices>
+            <constraint_lower_bounds>0 0</constraint_lower_bounds>
+            <constraint_upper_bounds>0 1000</constraint_upper_bounds>
+                 ============================================================ -->
+        </microbe0>
+
+        <microbe1>
+            <name_of_microbes>planktonic_SRB</name_of_microbes>
+            <solver_type>LBM</solver_type>
+            <reaction_type>none</reaction_type>
+            <initial_densities>0.0</initial_densities>
+            <decay_coefficient>6.94e-8</decay_coefficient>
+
+            <!-- REQUIRED for LBM and FD pools: how the cells themselves spread. -->
+            <biomass_diffusion_coefficients>
+                <in_pore>1.0e-10</in_pore>
+                <in_biofilm>1.0e-11</in_biofilm>
+            </biomass_diffusion_coefficients>
+
+            <half_saturation_constants>7.0e-5 2.0e-4 0</half_saturation_constants>
+            <maximum_uptake_flux>0 0 0</maximum_uptake_flux>
+
+            <!-- NOTE: <maximum_uptake_flux> above is ALSO read by the kinetics path
+                 (defineKinetics.hh), where it means mol substrate per mol cells per
+                 second, not mmol/gDW/h.  If a microbe uses BOTH kinetics and a
+                 metabolic solver, give the metabolic solver its own tag so the two
+                 do not have to share one number:
+                 <fba_maximum_uptake_flux>10.0 0.5 0</fba_maximum_uptake_flux>      -->
+
+            <left_boundary_type>Neumann</left_boundary_type>
+            <left_boundary_condition>0.0</left_boundary_condition>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <right_boundary_condition>0.0</right_boundary_condition>
+        </microbe1>
+
+    </microbiology>
+
+
+    <!-- ====================================================================
+         AQUEOUS SPECIATION  (optional, off here)
+         ====================================================================
+         Solves chemical equilibrium in every pore voxel, every step, using a
+         components-and-species tableau.  It is the most expensive part of the
+         code by a wide margin, so leave it off until you need it.
+
+         <components>   the master species, space separated.  Their names must
+                        match <name_of_substrates> for the coupling to work.
+         <stoichiometry>  one row per substrate, each row giving how many of
+                        each component that substrate contains.  Every row must
+                        have exactly as many numbers as there are components.
+         <logK>         one formation constant per substrate; components
+                        themselves take 0.
+
+         Rows of all zeros mark a species the equilibrium solver ignores -
+         use that for minerals and biomass that only react kinetically.
+
+         KNOWN LIMITS, worth stating plainly: activities are ideal (no
+         Debye-Huckel or Davies correction), there is no temperature dependence,
+         no gas phase, no redox couple, and no mineral saturation index.  The
+         logK values you supply are therefore conditional constants at your own
+         ionic strength and 25 C.
+
+         See CompLaB_example_uranium_zhao.xml for a complete 95-species,
+         17-component tableau.
+         ==================================================================== -->
+    <equilibrium>
+        <enabled>false</enabled>
+    </equilibrium>
+
+
+    <!-- ====================================================================
+         MINERAL PRECIPITATION AND PORE CLOGGING  (optional, off here)
+         ====================================================================
+         Lets an immobile solid physically fill a voxel and block the flow.
+         Requires a substrate marked <immobile>true</immobile> to point at.
+
+           solid_substrate  index of the mineral substrate
+           max_precipRho    mol/L at which a voxel counts as completely full.
+                            Derive it from the mineral: 1000 / molar volume in
+                            cm3/mol.  Mackinawite, for instance, is
+                            87.91 g/mol / 4.30 g/cm3 = 20.44 cm3/mol -> 48.9.
+           surface_only     1 = grow only on wall-adjacent voxels
+                            (heterogeneous nucleation; physically right)
+                            0 = grow anywhere
+           perm_ratio       0 = a filled voxel is an impermeable wall
+           update_interval  re-check the fill and re-solve the flow this often
+
+         KNOWN LIMIT: the conversion is one-way.  There is no dissolution path
+         that reopens a voxel once it has sealed.
+         ==================================================================== -->
+    <precipitation>
+        <enabled>false</enabled>
+    </precipitation>
+
+
+
+    <!-- ====================================================================
+         MINERAL DISSOLUTION AND PORE RE-OPENING  (optional, off here)
+         ====================================================================
+         The reverse of the block above: lets a mineral be eaten away until its
+         voxel opens back up to flow.  Independent of <precipitation>, so you can
+         run precipitation only, dissolution only, both, or neither.
+
+         WHAT CAN DISSOLVE
+
+         Only what you declare here.  Each <phaseN> block is one dissolvable
+         solid, and anything not listed can never dissolve.  That is deliberate:
+         if the rule were simply "a solid voxel with no mineral left becomes
+         pore", then an inert quartz grain, which never held any mineral, is
+         already below any threshold and your whole grain pack would dissolve on
+         the first step.  Declaring phases makes quartz safe by construction.
+
+         A phase is four numbers:
+
+           material_number  which mask code this phase occupies.  Give the
+                            precipitate a code of its own if you also want the
+                            original grains to dissolve, so the two can be told
+                            apart.
+           substrate        which <immobile> substrate holds its inventory.
+           full_density     mol/L in a completely full voxel.  Derive it from the
+                            mineral: 1000 / (molar volume in cm3/mol).  For
+                            mackinawite, 87.91 g/mol over 4.30 g/cm3 is
+                            20.44 cm3/mol, so 48.9.
+           initial_fill     mol/L a voxel of this phase starts with.  0 for a
+                            precipitate (it grows by reaction); full for an
+                            original grain that starts solid.
+
+         is_precipitate marks the phase that <precipitation> converts voxels
+         into.  Its voxels are stamped as they seal, so they can later reopen.
+
+         reopen_fraction is hysteresis, and you need it.  A voxel seals at
+         full_density and reopens below reopen_fraction x full_density.  With a
+         single threshold a voxel sitting on it would flip every update interval,
+         and every flip re-solves the flow.  0.9 is a sensible gap.
+
+         THE RATE LAW IS YOURS.  Exactly as precipitation takes its rate from
+         defineAbioticKinetics.hh, dissolution calls defineDissolutionRate() in
+         that same file.  You are handed the water touching the mineral and how
+         much is left; you return how fast it dissolves and what that releases.
+         See the worked example in that file.  The shipped default does nothing,
+         so turning this on without editing it is harmless.
+
+         WHERE THE PRODUCTS GO: into the open neighbouring voxels, split evenly.
+         A dissolving voxel is solid, so anything released inside it would sit in
+         water that never moves.  A voxel with no open neighbour is fully
+         enclosed, unreachable by water, and does not dissolve at all.
+         ==================================================================== -->
+    <dissolution>
+        <enabled>false</enabled>
+        <reopen_fraction>0.9</reopen_fraction>   <!-- reopen below 0.9 x full.  default: 0.9 -->
+        <surface_only>1</surface_only>           <!-- 1 = only wetted voxels dissolve (physical) -->
+        <update_interval>200</update_interval>   <!-- steps between geometry re-checks -->
+
+        <!-- Example, commented out.  Uncomment and adapt.
+
+        <phase0>
+            <name>FeS_precipitate</name>
+            <material_number>0</material_number>
+            <substrate>9</substrate>
+            <full_density>48.9</full_density>
+            <initial_fill>0</initial_fill>
+            <is_precipitate>true</is_precipitate>
+        </phase0>
+
+        <phase1>
+            <name>calcite_grain</name>
+            <material_number>0</material_number>
+            <substrate>13</substrate>
+            <full_density>27.1</full_density>
+            <initial_fill>27.1</initial_fill>
+        </phase1>
+
+        -->
+    </dissolution>
+
+    <!-- ====================================================================
+         OUTPUT
+         ====================================================================
+         CompLB3D writes VTK ImageData (.vti) for viewing, and Palabos binary
+         checkpoints (.chk) for restarting.
+
+         NOTE: the .vti files are written with unit spacing, so ParaView shows
+         lattice coordinates, not micrometres.  Scale by <dx> if you need
+         physical distances.
+         ==================================================================== -->
+    <IO>
+        <read_NS_file>false</read_NS_file>    <!-- restart the flow from a checkpoint.  default: false -->
+        <read_ADE_file>false</read_ADE_file>  <!-- restart the chemistry likewise.      default: false -->
+
+        <ns_filename>nsLattice</ns_filename>
+        <mask_filename>maskLattice</mask_filename>
+        <subs_filename>subsLattice</subs_filename>
+        <bio_filename>bioLattice</bio_filename>
+
+        <save_VTK_interval>1000</save_VTK_interval>   <!-- steps between snapshots.  default: 1000 -->
+        <save_CHK_interval>10000</save_CHK_interval>  <!-- steps between restart points. default: 1e6 -->
+
+        <debug_updRxn>0</debug_updRxn>  <!-- 1 prints reaction-application debug lines. default: 0 -->
+    </IO>
+
+</parameters>
