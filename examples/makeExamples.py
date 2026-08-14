@@ -1373,6 +1373,20 @@ def build():
     <microbiology>
         <number_of_microbes>1</number_of_microbes>
 
+        <!-- BOTH OF THESE ARE REQUIRED FOR ANY BIOFILM MICROBE, and leaving them
+             out is not harmless. <thrd_biofilm_fraction> defaults to 0, which
+             makes the cellular-automaton test biomass-at-or-above-threshold true in
+             EVERY pore voxel, including the empty ones, and an empty voxel has
+             no species to label, so the mask update hits its "should never
+             happen" branch and prints an error. Once per empty voxel per sweep:
+             the first run of this case wrote a 28 MB log of
+             "Error: Updating mask failed." and the results were still fine.
+             <maximum_biomass_density> defaults to 1e9 kg/m3, which is not a
+             density any biofilm reaches, so the cap never engages. -->
+        <maximum_biomass_density>50</maximum_biomass_density>
+        <thrd_biofilm_fraction>0.01</thrd_biofilm_fraction>
+        <CA_method>fraction</CA_method>
+
         <microbe0>
             <name_of_microbes>Ecoli</name_of_microbes>
             <solver_type>FD</solver_type>
@@ -1427,10 +1441,7 @@ def build():
         </microbe0>
     </microbiology>
 
-    <equilibrium>
-        <enabled>false</enabled>
-    </equilibrium>
-""" + K.io(vtk=200)
+""" + K.OFF_EQ + K.OFF_PRECIP + K.OFF_DISSOL + K.io(vtk=200)
 
     case(16, "complete_pipeline", xml, readme(
         16, "the whole pipeline, from the XML alone",
