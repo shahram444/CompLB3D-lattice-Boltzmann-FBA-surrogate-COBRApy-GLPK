@@ -69,6 +69,7 @@
 #include <cstring>
 #include <vector>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <iomanip>
 #include <cmath>
 
@@ -704,10 +705,41 @@ int main(int argc, char **argv) {
         //   on every rank would fit a different network per rank from a different random
         //   start, and the domain would grow at a different rate in each subdomain.
         global::mpi().barrier();
-        if (!global::mpi().isMainProcessor()) {
-            std::string serr;
-            if (!complab_srg::load(srgNet, icfg.srgWeights, &serr)) {
-                pcout << "  [SRG] rank could not read " << icfg.srgWeights << ": " << serr << "\n";
+
+        //   [FIX] THE FAILURE HAS TO BE COLLECTIVE.
+        //
+        //   The first version of this returned -1 from whichever rank could not read the
+        //   file. That is a deadlock: the failing ranks leave, the rest walk on into the
+        //   next MPI collective in the geometry setup and block there until the wall clock
+        //   kills the job. And because the message went through pcout, which prints on rank
+        //   0 only, a non-master failure said nothing at all. A job that hangs silently
+        //   after "written to output/..." is the worst possible way to report a missing file.
+        //
+        //   So: every rank reports, the answer is reduced, and either all of them continue
+        //   or all of them stop.
+        //
+        //   The retry is for a shared filesystem. A barrier synchronises PROCESSES, not
+        //   filesystem metadata: on Lustre or NFS a file another node closed a microsecond
+        //   ago may not be visible yet. Three tries over three seconds costs nothing on the
+        //   run that does not need it.
+        {
+            int rankOk = 1;
+            if (!global::mpi().isMainProcessor()) {
+                std::string serr;
+                rankOk = 0;
+                for (int attempt = 0; attempt < 3 && !rankOk; ++attempt) {
+                    if (attempt) sleep(1);
+                    if (complab_srg::load(srgNet, icfg.srgWeights, &serr)) rankOk = 1;
+                }
+                if (!rankOk)
+                    std::cerr << "  [SRG] rank " << global::mpi().getRank()
+                              << " could not read " << icfg.srgWeights << ": " << serr << std::endl;
+            }
+            int allOk = rankOk;
+            global::mpi().reduceAndBcast(allOk, MPI_MIN);
+            if (!allOk) {
+                pcout << "  [SRG] at least one rank could not read " << icfg.srgWeights << ".\n"
+                      << "  [SRG] See the .err file for which. Stopping on every rank.\n";
                 return -1;
             }
         }

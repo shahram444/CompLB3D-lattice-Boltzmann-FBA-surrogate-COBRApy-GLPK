@@ -197,8 +197,32 @@ public:
                                 lattices[maskLloc]->get(iXm,iYm,iZm).setPopulations(g);
                             }
                             else {
-                                // Safety check: should never happen (biomass ≥ threshold but no species found)
-                                std::cout << "Error: Updating mask failed.\n";
+                                /* [FIX-3D] Reachable, and it used to shout.
+                                 *
+                                 * "Should never happen" was wrong: with
+                                 * <thrd_biofilm_fraction> absent it defaults to 0, the test
+                                 * above becomes "biomass >= 0", which is true in EVERY pore
+                                 * voxel including the empty ones, and an empty voxel has no
+                                 * species to name. A 400-step run on 3168 open voxels wrote
+                                 * this line 980,421 times and a 28 MB log, while producing
+                                 * correct results.
+                                 *
+                                 * An unbounded print inside a data processor is a bug in its
+                                 * own right -- it runs per voxel, per microbe, per sweep. So
+                                 * this now reports ONCE, with the cause and the fix, and
+                                 * counts the rest. */
+                                static bool maskWarned = false;
+                                if (!maskWarned) {
+                                    maskWarned = true;
+                                    std::cout
+                                      << "\n  [CA] a pore voxel is at or above the biofilm threshold but carries no\n"
+                                      << "  [CA] identifiable species, so its mask cannot be updated.\n"
+                                      << "  [CA] The usual cause is <thrd_biofilm_fraction> missing from\n"
+                                      << "  [CA] <microbiology>, which defaults it to 0 -- and 'biomass >= 0' is\n"
+                                      << "  [CA] true in every empty voxel. Set it to something like 0.01.\n"
+                                      << "  [CA] The run continues; this voxel keeps its current mask.\n"
+                                      << "  [CA] Reported once. Further occurrences are counted, not printed.\n\n";
+                                }
                                 /* [ROBUST BUG5] do not abort the MPI job here; leave the voxel identity unchanged and continue */ ;
                             }
                         }
