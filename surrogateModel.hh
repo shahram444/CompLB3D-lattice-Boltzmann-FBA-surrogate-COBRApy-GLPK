@@ -144,6 +144,13 @@
 #include <cstddef>      // std::size_t, the type used to count list entries
 #include <iostream>     // lets us print a warning to the screen if something goes wrong
 
+/* [NEW] The runtime registry. This is what makes <surrogate><weights_file> in CompLaB.xml work:
+ * if main() loaded (or trained) a network at start-up, the block at the top of
+ * defineSurrogateModel() below uses it and this file's own compiled-in weights are not consulted.
+ * With no <surrogate> block in the XML the registry is empty, the block is skipped, and everything
+ * below behaves exactly as it always has. */
+#include "src/complab3d_surrogate.hh"
+
 /* ---------------------------------------------------------------------------
  * WARNING PRINTER
  *   Prints a short message about a dimension mismatch. Capped at a few messages
@@ -265,6 +272,36 @@ void defineSurrogateModel(plb::plint microbeId,
     if (iM >= bioR.size() || iM >= Fin.size() || iM >= Fout.size()) {
         surrogateDimWarning("defineSurrogateModel (microbeId out of range)", iM, bioR.size());
         return;
+    }
+
+    /* =======================================================================
+     * [NEW] A NETWORK LOADED AT RUN TIME TAKES PRECEDENCE
+     *
+     * If CompLaB.xml has a <surrogate> block with a <weights_file>, main() read
+     * that file (or trained one) before the simulation started and registered
+     * the result. Using it here is what removes the old manual step of pasting
+     * weights into this file and recompiling.
+     *
+     * Nothing is registered when there is no <surrogate> block, so with an
+     * unchanged input file this test is one null pointer comparison per call
+     * and the shipped example below runs exactly as before.
+     *
+     * The registry also remembers WHICH substrate each network input stands for,
+     * so the inputs are gathered by name rather than by position -- a network
+     * trained on (acetate, Fe3) cannot silently be fed them the other way round.
+     *
+     * evalBound() clamps to the box the network was trained on and counts how
+     * often it had to; the count is printed at the end of the run. See the
+     * REGISTRY section of src/complab3d_surrogate.hh for why clamping rather
+     * than extrapolating.
+     * ======================================================================= */
+    {
+        const complab_srg::Binding *rtB = complab_srg::bindingFor(static_cast<int>(microbeId));
+        if (rtB != 0) {
+            bioR[iM] = complab_srg::evalBound(*rtB, Fin[iM]);
+            (void) mask;
+            return;                 // Fout keeps its pre-filled Fin: uptake as the solver estimated it
+        }
     }
 
     // "mask" is available so that you can make growth depend on the region, for

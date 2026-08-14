@@ -195,6 +195,38 @@
             <!-- Material map, read from <input_path>.        REQUIRED         -->
             <filename>geometry.dat</filename>
 
+            <!-- GENERATE the pore space instead of reading a file (new).
+                 kind: channel, spheres, cylinders, random, fracture, layered.
+                 The result is written out as a .dat so the run is reproducible
+                 from its own output. Whatever the source, the geometry is
+                 inspected before the first step: porosity, whether it
+                 percolates inlet to outlet, and how much pore space is
+                 isolated. A sealed domain stops the run, because a pressure
+                 drop across one is not a well-posed problem. -->
+            <!--
+            <generate>random</generate>
+            <porosity>0.35</porosity>
+            <grain_radius>6</grain_radius>
+            <grain_count>20</grain_count>
+            <aperture>6</aperture>
+            <roughness>2</roughness>
+            <layers>4</layers>
+            <seed>1</seed>
+            <walls>y</walls>
+            <write_geometry>generated_geometry.dat</write_geometry>
+            -->
+
+            <!-- Or IMPORT a raw binary volume, such as segmented CT data
+                 exported from ImageJ. PNG and TIFF stacks are not read here;
+                 tools/geometry.py handles those. -->
+            <!--
+            <import_raw>scan.raw</import_raw>
+            <raw_dtype>uint8</raw_dtype>
+            <threshold>128</threshold>
+            <invert>false</invert>
+            -->
+
+
             <material_numbers>
                 <pore>2</pore>              <!-- open fluid.        default: 2  -->
                 <solid>0</solid>            <!-- grain interior; no dynamics at
@@ -257,6 +289,13 @@
          One <substrateN> block per chemical, numbered from 0 with no gaps.
          The ORDER fixes the C[] indices that defineKinetics.hh and
          <exchange_reaction_indices> refer to, so do not reorder casually.
+         
+         OR NAME THEM, which is safer and is now recommended:
+             <exchange_reaction_names>EX_ac_e EX_o2_e none</exchange_reaction_names>
+         The indices above are POSITIONAL. If the model file is revised and one
+         reaction is inserted, every index after it points somewhere else and the
+         run does not complain. A name either resolves or the run stops with the
+         name printed. Use none for a substrate this organism does not exchange.
          ==================================================================== -->
     <chemistry>
 
@@ -666,5 +705,129 @@
 
         <debug_updRxn>0</debug_updRxn>  <!-- 1 prints reaction-application debug lines. default: 0 -->
     </IO>
+
+
+    <!-- ====================================================================
+         MODEL SOURCE  (optional, new)
+         ====================================================================
+         Where a genome-scale model comes from. Three places are tried, and
+         only the last touches the network:
+
+           1. bundled    models/iJO1366.xml.gz, shipped with the code
+           2. cached     input/iJO1366.xml, unpacked or downloaded earlier
+           3. downloaded only if allow_download is true
+
+         COMPUTE NODES USUALLY HAVE NO OUTBOUND NETWORK. On a cluster, fetch
+         once on the login node and leave allow_download false in the batch
+         job; a missing model then stops the run with the exact curl command
+         rather than hanging on every rank.
+
+         The file is checked against models/manifest.txt. A different number
+         of reactions means a DIFFERENT REVISION of the model, which matters
+         because exchange_reaction_indices is positional: a revision that
+         inserts one reaction silently shifts every index after it.
+         ==================================================================== -->
+    <!--
+    <model_source>bigg:iJO1366</model_source>
+    <model_cache>input</model_cache>
+    <model_bundle>models</model_bundle>
+    <allow_download>false</allow_download>
+    -->
+
+
+    <!-- ====================================================================
+         SURROGATE MODEL  (optional, new)
+         ====================================================================
+         The weights live in a FILE read at run time, not compiled in. That
+         removes the rebuild, and it lets the training range travel with the
+         weights, so the solver can refuse to extrapolate.
+
+         If the weights file is absent and train_if_missing is true, the
+         network is fitted here, once, at start-up: the flux balance solver is
+         swept over the ranges below, a network is fitted, and the fit is then
+         checked by re-solving the LP at points it never saw. Needs GLPK.
+
+         Each inputN line is: substrate name, low, high, and "log" if the
+         range should be sampled logarithmically. Use log whenever the range
+         spans more than about one order of magnitude.
+
+         Keep to 1 to 3 inputs. Past that the samples needed grow faster than
+         the fit improves.
+
+         TRAINING NEEDS A LINEAR PROGRAM, and it will find one either way:
+         if a microbe in this run already uses glpk, its own problem is swept,
+         so the network is fitted to exactly what the run would have solved.
+         If none does (the usual case: one organism of reaction_type
+         surrogate) a temporary problem is built from that microbe's own
+         model_filename (or from model_source above) and released as soon as
+         training finishes.
+
+         THE WEIGHTS FILE RECORDS ITS INPUT SUBSTRATE NAMES, and they are
+         matched against name_of_substrates at start-up. A network trained on
+         (acetate, Fe3) therefore cannot silently be fed them the other way
+         round. Older files exported from MATLAB carry no names; they load, and
+         positional order is assumed, with a warning.
+
+         AT RUN TIME every evaluation is clamped to the training box and
+         counted. The end of the run reports how often that happened. Above 5%
+         it says, plainly, that the results should not be used until the ranges
+         are widened and the network refitted.
+         ==================================================================== -->
+    <!--
+    <surrogate>
+        <enabled>true</enabled>
+        <weights_file>geobacter_net.srg</weights_file>
+        <train_if_missing>true</train_if_missing>
+        <train>
+            <samples>4000</samples>
+            <restarts>5</restarts>
+            <epochs>4000</epochs>
+            <verify_points>512</verify_points>
+            <layers>10 10 10 10</layers>
+            <log_output>false</log_output>
+            <seed>1</seed>
+            <input0>acetate 1e-3 10  log</input0>
+            <input1>Fe3     1e-5 0.5 log</input1>
+        </train>
+    </surrogate>
+    -->
+
+
+    <!-- ====================================================================
+         DIAGNOSTICS  (optional, new)
+         ====================================================================
+         Writes one CSV row per interval: porosity, and the total, mean,
+         minimum and maximum of every substrate and microbe, over OPEN voxels
+         only, so a run that seals pore space is not divided by a moving
+         denominator.
+
+         Each conserve line names a sum the reaction network cannot create or
+         destroy. One mole of Fe2+ removed must appear as one mole of FeS. A
+         drift beyond tolerance is reported the moment it happens, which is
+         worth far more than discovering it a fortnight later.
+
+         A check naming a substrate that does not exist is reported as
+         SKIPPED, never as PASS.
+
+         WHAT TO CONSERVE. A substrate held at a fixed concentration on an
+         inlet is supplied from outside: its total is not conserved and never
+         will be, so naming it here guarantees a failure that means nothing.
+         Name a CLOSED sum instead: every species carrying one element.
+
+         The CSV is written inside output_path unless summary_csv is an
+         absolute path. Totals are over the physical domain x = 1..nx-2; the
+         two ghost columns are excluded, so a total does not jump when the
+         inlet concentration changes.
+         ==================================================================== -->
+    <!--
+    <diagnostics>
+        <enabled>true</enabled>
+        <summary_csv>summary.csv</summary_csv>
+        <interval>500</interval>
+        <tolerance>1e-6</tolerance>
+        <conserve>Fe2+FeS</conserve>
+        <conserve1>HS+FeS</conserve1>
+    </diagnostics>
+    -->
 
 </parameters>

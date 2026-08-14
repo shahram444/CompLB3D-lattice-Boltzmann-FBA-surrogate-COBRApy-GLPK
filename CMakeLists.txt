@@ -81,16 +81,40 @@ endif()
 ###############################################################################
 
 
+# WHERE PALABOS IS.
+#
+#   Override it without editing this file:
+#       cmake -DPALABOS_ROOT=/path/to/palabos-v2.3.0 ..
+#   or set PALABOS_ROOT in your environment. The default is the Tahoma path so
+#   that an existing cluster workflow keeps working unchanged.
+#
+#   Verified against Palabos v2.3.0. The build was run end to end against that
+#   release: the executable links, and the example suite runs.
+if(NOT DEFINED PALABOS_ROOT)
+    if(DEFINED ENV{PALABOS_ROOT})
+        set(PALABOS_ROOT "$ENV{PALABOS_ROOT}")
+    else()
+        set(PALABOS_ROOT "/scratch/sa01687/Tahoma/versionControl/palabos-v2.3.0")
+    endif()
+endif()
+if(NOT EXISTS "${PALABOS_ROOT}/src/palabos3D.h")
+    message(FATAL_ERROR
+        "Palabos was not found at PALABOS_ROOT=${PALABOS_ROOT}\n"
+        "  Expected ${PALABOS_ROOT}/src/palabos3D.h\n"
+        "  Point it at your copy:  cmake -DPALABOS_ROOT=/path/to/palabos-v2.3.0 ..")
+endif()
+message("Palabos: ${PALABOS_ROOT}")
+
 include_directories("/usr/local/include")
-include_directories("/scratch/sa01687/Tahoma/versionControl/palabos-v2.3.0/src")
-include_directories("/scratch/sa01687/Tahoma/versionControl/palabos-v2.3.0/externalLibraries")
-include_directories("/scratch/sa01687/Tahoma/versionControl/palabos-v2.3.0/externalLibraries/Eigen3")
+include_directories("${PALABOS_ROOT}/src")
+include_directories("${PALABOS_ROOT}/externalLibraries")
+include_directories("${PALABOS_ROOT}/externalLibraries/Eigen3")
 #include_directories("/apps/eb/Anaconda3/5.0.1/include/python3.6m") # location for Python.h
 link_directories("/usr/local/lib")
 #link_directories("/apps/eb/Anaconda3/5.0.1/lib")
 
-file(GLOB_RECURSE PALABOS_SRC "/scratch/sa01687/Tahoma/versionControl/palabos-v2.3.0/src/*.cpp")
-file(GLOB_RECURSE EXT_SRC "/scratch/sa01687/Tahoma/versionControl/palabos-v2.3.0/externalLibraries/tinyxml/*.cpp")
+file(GLOB_RECURSE PALABOS_SRC "${PALABOS_ROOT}/src/*.cpp")
+file(GLOB_RECURSE EXT_SRC "${PALABOS_ROOT}/externalLibraries/tinyxml/*.cpp")
 
 add_library(palabos STATIC ${PALABOS_SRC} ${EXT_SRC})
 
