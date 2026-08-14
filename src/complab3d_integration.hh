@@ -336,6 +336,26 @@ inline bool prepareSurrogate(const Config &cfg, complab_srg::Network &net,
     std::string err;
     if (complab_srg::load(net, cfg.srgWeights, &err)) {
         log += "  [SRG] loaded " + cfg.srgWeights + "\n";
+
+        /* [FIX] Does this file belong to THIS model?
+         *
+         * Nothing used to check. Change <model_source> from bigg:e_coli_core to
+         * bigg:iJO1366, forget to delete the old .srg, and the run quietly keeps using
+         * the network fitted to the first organism -- every growth rate wrong, every
+         * number plausible, and no line in the log to suggest it.
+         *
+         * The file records what it was trained on. Compare, and say so if they differ.
+         * A warning rather than a stop: a network trained offline against the same model
+         * under a different name is legitimate, and refusing to run would be worse than
+         * saying what was noticed. */
+        if (!cfg.modelSource.empty() && !net.provenance.empty()
+            && net.provenance.find(cfg.modelSource) == std::string::npos) {
+            log += "  [SRG] WARNING: this weights file says it was '" + net.provenance + "',\n"
+                   "  [SRG] but <model_source> is '" + cfg.modelSource + "'. If the metabolic\n"
+                   "  [SRG] model changed, this network was fitted to the OTHER one and every\n"
+                   "  [SRG] growth rate it returns is wrong. Delete " + cfg.srgWeights + "\n"
+                   "  [SRG] to refit, or ignore this if you know the two are the same model.\n";
+        }
         char b[256];
         for (int i = 0; i < net.nIn; ++i) {
             std::snprintf(b, sizeof(b), "  [SRG]   input %d valid over %.6g .. %.6g\n",
