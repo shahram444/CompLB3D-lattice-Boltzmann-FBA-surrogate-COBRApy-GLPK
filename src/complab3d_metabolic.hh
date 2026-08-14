@@ -117,6 +117,12 @@
 #include <cstring>
 #include <cstdlib>
 
+/* [NEW] The native SBML reader.  Unconditional: it is header-only and depends only on tinyxml,
+ * which Palabos already compiles into every build (externalLibraries/tinyxml).  Including it here
+ * is what lets <model_filename> point straight at a genome-scale model instead of at the output of
+ * extractMM.py. */
+#include "complab3d_sbml.hh"
+
 #ifdef COMPLAB_ENABLE_GLPK
 #include "complab3d_glpkcpp.hh"
 #endif
@@ -407,6 +413,11 @@ struct MetabolicConfig {
     /* ---- per-microbe, indexed by GLOBAL microbe id ------------------------ */
     std::vector<std::string>            model_filename;     // "" when not an FBA microbe
     std::vector< std::vector<plint> >   subsLoc;            // [microbe][substrate] -> exchange column, -1 if unused
+    /* [NEW] <exchange_reaction_names>: the same mapping written as reaction names rather than
+     * column numbers.  Empty when the user gave indices instead.  Resolved into subsLoc by
+     * load_metabolic_models3D(), because it needs the model's reaction list to do it -- which is
+     * the whole point: a name survives a change of model revision, a column number does not. */
+    std::vector< std::vector<std::string> > exchange_names;
     /* [FIX-3D] The Michaelis-Menten Vmax now comes from <maximum_uptake_flux>,
      * which is what the documentation, the 2-D code and every comment always
      * said it did.  The first version of this port used <substrate_lower_bounds>
@@ -672,6 +683,7 @@ inline int initialize_metabolic (MetabolicConfig &cfg,
     /* -------------------------------------------------- allocate per-microbe -- */
     cfg.model_filename.assign(num_of_microbes, std::string());
     cfg.subsLoc      .assign(num_of_microbes, std::vector<plint>(num_of_substrates, -1));
+    cfg.exchange_names.assign(num_of_microbes, std::vector<std::string>());
     cfg.vmax         .assign(num_of_microbes, std::vector<T>(num_of_substrates, T()));
     cfg.maxUptake    .assign(num_of_microbes, std::vector<T>(num_of_substrates, (T) -1e30));
     cfg.maxRelease   .assign(num_of_microbes, std::vector<T>(num_of_substrates, (T)  1e30));
@@ -746,7 +758,28 @@ inline int initialize_metabolic (MetabolicConfig &cfg,
                 return -1;
             }
 
-            /* which substrates this microbe exchanges, and where in its model */
+            /* which substrates this microbe exchanges, and where in its model.
+             *
+             * [NEW] Two spellings are accepted.  <exchange_reaction_indices> is the original:
+             * column numbers, which are fast and exact but silently mean something different the
+             * moment the model file changes revision.  <exchange_reaction_names> is the safer one:
+             * reaction names, resolved against the model itself in load_metabolic_models3D().  If
+             * both are given the names win, because they are the ones that can be checked. */
+            bool haveNames = false;
+            try {
+                std::vector<std::string> nm;
+                doc["parameters"]["microbiology"][bioname]["exchange_reaction_names"].read(nm);
+                if ((plint) nm.size() != num_of_substrates) {
+                    pcout << bioname << ": <exchange_reaction_names> has " << (plint) nm.size()
+                          << " entries but there are " << num_of_substrates << " substrates. "
+                          << "Use 'none' for a substrate this microbe does not exchange. Terminating.\n";
+                    return -1;
+                }
+                cfg.exchange_names[iM] = nm;
+                haveNames = true;
+            }
+            catch (PlbIOException& exception) {}
+
             try {
                 std::vector<plint> loc;
                 doc["parameters"]["microbiology"][bioname]["exchange_reaction_indices"].read(loc);
@@ -759,12 +792,17 @@ inline int initialize_metabolic (MetabolicConfig &cfg,
                 /* [FIX-3D] CompLaB 2D marks an unused substrate with -99; this code
                  * uses -1.  Accept both, so 2D input files port unchanged. */
                 for (size_t q = 0; q < loc.size(); ++q) if (loc[q] < 0) loc[q] = -1;
-                cfg.subsLoc[iM] = loc;
+                if (haveNames)
+                    pcout << "  note: " << bioname << " gives both <exchange_reaction_names> and "
+                          << "<exchange_reaction_indices>. The names are used; the indices are ignored.\n";
+                else
+                    cfg.subsLoc[iM] = loc;
             }
             catch (PlbIOException& exception) {
-                if (rxntype::usesFBA(rt)) {
+                if (rxntype::usesFBA(rt) && !haveNames) {
                     pcout << bioname << ": reaction_type " << rxntype::name(rt)
-                          << " requires <exchange_reaction_indices>. Terminating.\n";
+                          << " requires <exchange_reaction_indices> or <exchange_reaction_names>. "
+                          << "Terminating.\n";
                     return -1;
                 }
             }
@@ -868,9 +906,11 @@ inline int initialize_metabolic (MetabolicConfig &cfg,
             if (rxntype::usesFBA(rt)) {
                 try { doc["parameters"]["microbiology"][bioname]["model_filename"].read(cfg.model_filename[iM]); }
                 catch (PlbIOException& exception) {
-                    pcout << bioname << ": reaction_type " << rxntype::name(rt)
-                          << " requires <model_filename>. Terminating.\n";
-                    return -1;
+                    /* [NEW] No longer fatal here.  <model_source> can supply the file instead, and
+                     * that block is read later, by the integration layer.  An FBA microbe with
+                     * neither is still an error -- it is just reported by
+                     * load_metabolic_models3D(), which is the first point that knows both. */
+                    cfg.model_filename[iM].clear();
                 }
             }
         }
@@ -909,16 +949,125 @@ inline int initialize_metabolic (MetabolicConfig &cfg,
 /* ============================================================================
  *  load_metabolic_models3D
  *
- *  Reads one <input_path>/<model_filename>.xml per FBA microbe -- the file
- *  produced by extractMM.py -- and applies any <constraint_*> overrides.
+ *  Reads one metabolic model per FBA microbe and applies the <constraint_*>
+ *  overrides.  TWO file formats are accepted, told apart by their root element
+ *  rather than by their extension:
  *
- *  Schema (must match extractMM.py exactly):
- *      Metabolic_Model / nmet nrxn objLoc S b c lb ub
- *  with S flattened row-major, metabolite-major:  S[i][j] = flat[i*nrxn + j].
+ *    <sbml>            a genome-scale model as it is distributed -- BiGG,
+ *                      ModelSEED, anything with the FBC v2 package.  Read
+ *                      natively by complab3d_sbml.hh.  This is the path that
+ *                      makes extractMM.py optional.
+ *
+ *    <Metabolic_Model> the flattened matrix file extractMM.py produces:
+ *                      nmet nrxn objLoc S b c lb ub, with S row-major and
+ *                      metabolite-major, S[i][j] = flat[i*nrxn + j].  Kept
+ *                      because every existing input file uses it.
+ *
+ *  <model_filename> may name the file with or without its extension.  Without,
+ *  ".xml" is appended, which is what every CompLaB 2D and 3D input file has
+ *  always assumed.
  *
  *  Returns 0 on success, -1 on failure.
  * ============================================================================
  */
+
+/* Does `s` end with `suffix`?  Written out because this header is compiled as
+ * C++98 in some build configurations and std::string::ends_with is C++20. */
+inline bool endsWithCI (const std::string &s, const std::string &suffix)
+{
+    if (s.size() < suffix.size()) return false;
+    for (size_t i = 0; i < suffix.size(); ++i) {
+        char a = s[s.size() - suffix.size() + i];
+        char b = suffix[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return false;
+    }
+    return true;
+}
+
+/* <model_filename> -> a path to open.
+ *
+ * An absolute path, or one that already looks like a file, is taken as given;
+ * a bare stem gets input_path in front and ".xml" behind.  That keeps every
+ * existing input file working while letting <model_source> hand back a path
+ * such as "input/e_coli_core.xml" that must NOT have ".xml" appended twice. */
+inline std::string resolveModelPath (const std::string &input_path, const std::string &name)
+{
+    if (name.empty()) return name;
+    const bool absolute = (name[0] == '/');
+    const bool hasDir   = (name.find('/') != std::string::npos);
+    const bool hasExt   = endsWithCI(name, ".xml") || endsWithCI(name, ".sbml")
+                       || endsWithCI(name, ".xml.gz");
+    if (absolute) return name;
+    if (hasExt && hasDir) return name;             // already a usable relative path
+    if (hasExt)           return input_path + name;
+    return input_path + name + ".xml";
+}
+
+/* The half of the load that is the same whichever format the file was in:
+ * override bounds, check the exchange columns, reshape S, store, report.
+ * Returns 0 or -1.  `nmet`/`nrxn` are taken from the caller's own parse. */
+inline int storeMetabolicModel (MetabolicConfig &cfg, plint iM, const std::string &fname,
+                                int nmet, int nrxn, plint objLoc,
+                                std::vector<T> &s1, std::vector<T> &b, std::vector<T> &c,
+                                std::vector<T> &lb, std::vector<T> &ub)
+{
+    if ((plint) s1.size() != (plint) nmet * (plint) nrxn) {
+        pcout << "  " << fname << ": <S> has " << (plint) s1.size()
+              << " entries but nmet*nrxn = " << (plint) nmet * (plint) nrxn << ". Terminating.\n";
+        return -1;
+    }
+    if ((plint) b.size()  != nmet) { pcout << "  " << fname << ": <b> must have nmet entries.\n";  return -1; }
+    if ((plint) c.size()  != nrxn) { pcout << "  " << fname << ": <c> must have nrxn entries.\n";  return -1; }
+    if ((plint) lb.size() != nrxn) { pcout << "  " << fname << ": <lb> must have nrxn entries.\n"; return -1; }
+    if ((plint) ub.size() != nrxn) { pcout << "  " << fname << ": <ub> must have nrxn entries.\n"; return -1; }
+
+    /* apply the per-microbe constraint overrides */
+    for (size_t k = 0; k < cfg.constraint_loc[iM].size(); ++k) {
+        const int j = cfg.constraint_loc[iM][k];
+        if (j < 0 || j >= nrxn) {
+            pcout << "  microbe" << iM << ": <constraint_indices> entry " << j
+                  << " is outside 0.." << nrxn-1 << ". Terminating.\n";
+            return -1;
+        }
+        lb[j] = cfg.constraint_lb[iM][k];
+        ub[j] = cfg.constraint_ub[iM][k];
+    }
+    /* and sanity-check the exchange indices while we have nrxn to hand */
+    for (plint s = 0; s < (plint) cfg.subsLoc[iM].size(); ++s) {
+        const plint j = cfg.subsLoc[iM][s];
+        if (j >= (plint) nrxn) {
+            pcout << "  microbe" << iM << ": exchange reaction " << j
+                  << " for substrate " << s << " is outside 0.." << nrxn-1 << ". Terminating.\n";
+            return -1;
+        }
+    }
+
+    /* reshape */
+    std::vector< std::vector<T> > s2(nmet, std::vector<T>(nrxn, T()));
+    for (int i = 0; i < nmet; ++i)
+        for (int j = 0; j < nrxn; ++j)
+            s2[i][j] = s1[(size_t) i * (size_t) nrxn + (size_t) j];
+
+    cfg.S3[iM] = s2;
+    cfg.S1[iM] = s1;
+    cfg.vec_b[iM]  = b;
+    cfg.vec_c[iM]  = c;
+    cfg.vec_lb[iM] = lb;
+    cfg.vec_ub[iM] = ub;
+    cfg.vec_objLoc[iM] = objLoc;
+    cfg.vec_nmets[iM]  = nmet;
+    cfg.vec_nrxns[iM]  = nrxn;
+
+    plint nz = 0;
+    for (size_t k = 0; k < s1.size(); ++k) if (s1[k] != T()) ++nz;
+    pcout << "    microbe" << iM << "  " << fname
+          << " : " << nmet << " metabolites, " << nrxn << " reactions, "
+          << nz << " nonzeros, objective at column " << objLoc << "\n";
+    return 0;
+}
+
 inline int load_metabolic_models3D (MetabolicConfig &cfg, const std::string &input_path,
                                     const std::vector<plint> &reaction_type,
                                     plint num_of_microbes)
@@ -928,7 +1077,78 @@ inline int load_metabolic_models3D (MetabolicConfig &cfg, const std::string &inp
     for (plint iM = 0; iM < num_of_microbes; ++iM) {
         if (!rxntype::usesFBA(reaction_type[iM])) continue;
 
-        const std::string fname = input_path + cfg.model_filename[iM] + ".xml";
+        if (cfg.model_filename[iM].empty()) {
+            pcout << "  microbe" << iM << ": reaction_type " << rxntype::name(reaction_type[iM])
+                  << " needs a metabolic model, but neither <model_filename> nor <model_source>\n"
+                  << "  supplied one. Terminating.\n";
+            return -1;
+        }
+
+        const std::string fname = resolveModelPath(input_path, cfg.model_filename[iM]);
+
+        /* ------------------------------------------------------------------ *
+         *  Which format is this?  Decided by the root element, not the name.  *
+         * ------------------------------------------------------------------ */
+        const complab_sbml::ModelFileKind kind = complab_sbml::classify(fname);
+
+        if (kind == complab_sbml::MODEL_UNKNOWN) {
+            pcout << "  could not read the metabolic model " << fname << "\n"
+                  << "  Its root element is neither <sbml> nor <Metabolic_Model>, or the file is\n"
+                  << "  missing or not well-formed XML.\n"
+                  << "  A gzipped model (.xml.gz) must be decompressed first; <model_source> does\n"
+                  << "  that for you. Terminating.\n";
+            return -1;
+        }
+
+        /* ================================================================== *
+         *  SBML, read natively.                                              *
+         * ================================================================== */
+        if (kind == complab_sbml::MODEL_SBML) {
+            complab_sbml::SbmlModel M = complab_sbml::readSbml(fname);
+            if (!M.ok()) {
+                pcout << "  could not read the SBML model " << fname << "\n  " << M.error
+                      << "\n  Terminating.\n";
+                return -1;
+            }
+
+            /* Resolve <exchange_reaction_names> now that the reaction list exists.  This is the
+             * reason names are better than indices: a wrong name is caught here, by name, with
+             * suggestions -- a wrong index is not caught at all. */
+            if (!cfg.exchange_names[iM].empty()) {
+                std::vector<int> cols;
+                std::string err;
+                if (!complab_sbml::resolveExchangeNames(M, cfg.exchange_names[iM], cols, err)) {
+                    pcout << "  microbe" << iM << ", model " << fname << ":\n  " << err
+                          << "  Terminating.\n";
+                    return -1;
+                }
+                cfg.subsLoc[iM].assign(cols.size(), -1);
+                for (size_t s = 0; s < cols.size(); ++s) cfg.subsLoc[iM][s] = (plint) cols[s];
+                pcout << "    microbe" << iM << "  resolved " << (plint) cols.size()
+                      << " exchange reaction name(s) against " << M.modelId << "\n";
+            }
+
+            /* The objective sense the file itself declares.  <objective_direction> in CompLaB.xml
+             * still wins if the user set it, because a user who overrides it means to. */
+            if (cfg.objDir[iM] == -1 && M.objSense == 1) cfg.objDir[iM] = 1;
+
+            pcout << complab_sbml::sanityReport(M);
+
+            if (storeMetabolicModel(cfg, iM, fname, M.nmet, M.nrxn, (plint) M.objLoc,
+                                    M.S, M.b, M.c, M.lb, M.ub) != 0) return -1;
+            continue;
+        }
+
+        /* ================================================================== *
+         *  The extractMM.py matrix format, exactly as before.                *
+         * ================================================================== */
+        if (!cfg.exchange_names[iM].empty()) {
+            pcout << "  microbe" << iM << ": <exchange_reaction_names> needs an SBML model, because\n"
+                  << "  the matrix format produced by extractMM.py does not carry reaction names.\n"
+                  << "  Point <model_filename> at the SBML file, or use <exchange_reaction_indices>.\n"
+                  << "  Terminating.\n";
+            return -1;
+        }
         try {
             XMLreader doc(fname);
 
@@ -954,63 +1174,14 @@ inline int load_metabolic_models3D (MetabolicConfig &cfg, const std::string &inp
             /* [FIX-3D] CompLaB 2D never checked these lengths, so a truncated or
              * mis-generated model file silently produced garbage fluxes.  Check now,
              * loudly, at start-up instead of quietly at every voxel. */
-            if ((plint) s1.size() != (plint) nmet * (plint) nrxn) {
-                pcout << "  " << fname << ": <S> has " << (plint) s1.size()
-                      << " entries but nmet*nrxn = " << (plint) nmet * (plint) nrxn << ". Terminating.\n";
+            if (storeMetabolicModel(cfg, iM, fname, nmet, nrxn, objLoc, s1, b, c, lb, ub) != 0)
                 return -1;
-            }
-            if ((plint) b.size()  != nmet) { pcout << "  " << fname << ": <b> must have nmet entries.\n";  return -1; }
-            if ((plint) c.size()  != nrxn) { pcout << "  " << fname << ": <c> must have nrxn entries.\n";  return -1; }
-            if ((plint) lb.size() != nrxn) { pcout << "  " << fname << ": <lb> must have nrxn entries.\n"; return -1; }
-            if ((plint) ub.size() != nrxn) { pcout << "  " << fname << ": <ub> must have nrxn entries.\n"; return -1; }
-
-            /* apply the per-microbe constraint overrides */
-            for (size_t k = 0; k < cfg.constraint_loc[iM].size(); ++k) {
-                const int j = cfg.constraint_loc[iM][k];
-                if (j < 0 || j >= nrxn) {
-                    pcout << "  microbe" << iM << ": <constraint_indices> entry " << j
-                          << " is outside 0.." << nrxn-1 << ". Terminating.\n";
-                    return -1;
-                }
-                lb[j] = cfg.constraint_lb[iM][k];
-                ub[j] = cfg.constraint_ub[iM][k];
-            }
-            /* and sanity-check the exchange indices while we have nrxn to hand */
-            for (plint s = 0; s < (plint) cfg.subsLoc[iM].size(); ++s) {
-                const plint j = cfg.subsLoc[iM][s];
-                if (j >= (plint) nrxn) {
-                    pcout << "  microbe" << iM << ": <exchange_reaction_indices> entry " << j
-                          << " for substrate " << s << " is outside 0.." << nrxn-1 << ". Terminating.\n";
-                    return -1;
-                }
-            }
-
-            /* reshape */
-            std::vector< std::vector<T> > s2(nmet, std::vector<T>(nrxn, T()));
-            for (int i = 0; i < nmet; ++i)
-                for (int j = 0; j < nrxn; ++j)
-                    s2[i][j] = s1[(size_t) i * (size_t) nrxn + (size_t) j];
-
-            cfg.S3[iM] = s2;
-            cfg.S1[iM] = s1;
-            cfg.vec_b[iM]  = b;
-            cfg.vec_c[iM]  = c;
-            cfg.vec_lb[iM] = lb;
-            cfg.vec_ub[iM] = ub;
-            cfg.vec_objLoc[iM] = objLoc;
-            cfg.vec_nmets[iM]  = nmet;
-            cfg.vec_nrxns[iM]  = nrxn;
-
-            plint nz = 0;
-            for (size_t k = 0; k < s1.size(); ++k) if (s1[k] != T()) ++nz;
-            pcout << "    microbe" << iM << "  " << cfg.model_filename[iM]
-                  << " : " << nmet << " metabolites, " << nrxn << " reactions, "
-                  << nz << " nonzeros, objective at column " << objLoc << "\n";
         }
         catch (PlbIOException& exception) {
             pcout << "  could not read the metabolic model " << fname << "\n"
                   << "  " << exception.what() << "\n"
-                  << "  (produce it with:  python3 extractMM.py <model.sbml>)  Terminating.\n";
+                  << "  (produce it with:  python3 extractMM.py <model.sbml>, or point\n"
+                  << "   <model_filename> straight at the SBML file)  Terminating.\n";
             return -1;
         }
     }

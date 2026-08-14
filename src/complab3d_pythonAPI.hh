@@ -463,6 +463,37 @@ inline int prep_cobrapy(char *pyFileName, char *src_path, std::vector<PyObject *
         pcout << "COBRApy ERROR: failed to import module \"" << COMPLAB3D_PY_MODULE
               << "\" (host passed \"" << (pyFileName ? pyFileName : "(null)") << "\"). "
               << "Check that " << COMPLAB3D_PY_MODULE << ".py is in " << src_path << "." << std::endl;
+
+        /* [FIX-3D] Say WHICH interpreter this is.
+         *
+         * The overwhelmingly common cause of "No module named 'cobra'" here is not a missing
+         * install: it is that cmake linked one Python and `pip install cobra` went to another.
+         * The executable embeds whichever libpython was found at build time, and that is very
+         * often not the `python3` on PATH -- on a cluster with modules it almost never is.
+         *
+         * Without this, the message sends the user to check a file that is already there. With
+         * it, a version mismatch is visible in one line:
+         *     embedded interpreter: 3.13.13, prefix /usr
+         *     $ python3 -c 'import cobra'      # works, because python3 is 3.11
+         */
+        pcout << "COBRApy: the interpreter compiled into this executable is:" << std::endl;
+        {
+            const char *ver = Py_GetVersion();
+            pcout << "COBRApy:   version " << (ver ? ver : "(unknown)") << std::endl;
+            PyObject *pfx = PySys_GetObject((char *) "prefix");
+            if (pfx != NULL) {
+                PyObject *s = PyObject_Str(pfx);
+                if (s != NULL) {
+                    const char *c = PyUnicode_AsUTF8(s);
+                    pcout << "COBRApy:   sys.prefix " << (c ? c : "(unprintable)") << std::endl;
+                    Py_DECREF(s);
+                }
+            }
+            PyErr_Clear();          /* the diagnostics above must not leave an exception set */
+        }
+        pcout << "COBRApy: if that version differs from the `python3` you installed cobra with,\n"
+              << "COBRApy: that IS the problem. Install cobra for THIS interpreter, or rebuild\n"
+              << "COBRApy: with -DPython3_EXECUTABLE=<the python3 that has cobra>." << std::endl;
         return COBRAPY_PY_EXCEPTION;
     }
 

@@ -25,12 +25,17 @@ does not.
 
 ## Running it
 
+The rate laws are compiled in, so each case needs its own build.
+
 ```bash
 cp defineKinetics.hh defineAbioticKinetics.hh  <path to CompLB3D>/
-cd <path to CompLB3D> && cd build && cmake .. && make
+cd <path to CompLB3D> && mkdir -p build && cd build
+cmake -DPALABOS_ROOT=<path to palabos-v2.3.0> .. && make -j
 cd .. && cp <path to this folder>/CompLaB.xml .
 cp -r <path to this folder>/input .
 ./complab
 ```
 
-`runAllExamples.sh` in the parent folder does all of that for every case.
+`runAllExamples.sh` in the parent folder does all of that for every case, and
+groups the cases by cmake configuration so the tree is reconfigured three times
+rather than sixteen.

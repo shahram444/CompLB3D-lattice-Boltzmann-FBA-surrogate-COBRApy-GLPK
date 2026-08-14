@@ -1270,6 +1270,36 @@ private:
     T beta;                /* Mixing/damping parameter (default 1.0 = no damping) */
 };
 
+/* ============================================================================
+ * [FIX-3D] OUT-OF-CLASS DEFINITIONS FOR THE CONSTANTS ABOVE
+ *
+ *   Found by the first real link against Palabos:
+ *       undefined reference to `EquilibriumChemistry<double>::MIN_CONC'
+ *
+ *   `static constexpr T MIN_CONC = 1e-30;` inside the class is a DECLARATION with
+ *   an initialiser, not a definition.  Reading its value in an expression is fine,
+ *   but passing it to std::min or std::max is not: those take their arguments by
+ *   const reference, which needs an address, which needs a definition.  Every use
+ *   below line 450 is exactly that:
+ *
+ *       conc[i] = std::max(std::min(conc[i], MAX_CONC), MIN_CONC);
+ *
+ *   The program therefore compiled cleanly and failed at the link step -- which is
+ *   why this was never caught by any header-level check.
+ *
+ *   C++17 made static constexpr members implicitly inline, so a build at -std=c++17
+ *   links without these lines.  CompLaB's CMakeLists sets -std=c++11, so they are
+ *   required.  They are harmless under C++17 (the definitions are simply redundant),
+ *   which is why fixing it here rather than by raising the standard is the safer
+ *   change: it works either way.
+ * ============================================================================ */
+template<typename T> constexpr T EquilibriumChemistry<T>::MIN_CONC;
+template<typename T> constexpr T EquilibriumChemistry<T>::MAX_CONC;
+template<typename T> constexpr T EquilibriumChemistry<T>::MIN_LOG_C;
+template<typename T> constexpr T EquilibriumChemistry<T>::MAX_LOG_C;
+template<typename T> constexpr T EquilibriumChemistry<T>::DEFAULT_CONDITION_TOL;
+template<typename T> constexpr T EquilibriumChemistry<T>::DEFAULT_BETA;
+
 
 /* ╔════════════════════════════════════════════════════════════════════════════╗
  * ║                                                                          ║

@@ -54,12 +54,18 @@
 #include "../defineAbioticKinetics.hh" // For abiotic kinetics (substrate-only reactions)
 #include "precipitationVOP.hh"         // [PRECIP-VOP] surface precipitation + pore-clogging feedback
 #include "dissolutionVOP.hh"           // [DISSOL-VOP] mineral dissolution + pore re-opening
+// [NEW] The pipeline blocks: <model_source>, geometry generation, <surrogate>, <diagnostics>.
+//   Header-only, and every one of them is inert unless its XML block is present, so a run with an
+//   unchanged CompLaB.xml takes exactly the path it took before these lines existed.
+#include "complab3d_integration.hh"
+#include "complab3d_srgtrain_glpk.hh"  // [NEW] the LP callback that in-run surrogate training uses
 #include <algorithm>
 #include <cctype>
 
 #include <chrono>
 #include <string>
 #include <iostream>
+#include <fstream>
 #include <cstring>
 #include <vector>
 #include <sys/stat.h>
@@ -215,6 +221,35 @@ int main(int argc, char **argv) {
     }
     if (erck!=0) { return -1; }
     pcout << "  [OK] XML configuration loaded and validated\n";
+
+    // ============================================================================
+    // [NEW] THE PIPELINE BLOCKS
+    //
+    //   <model_source>, <surrogate>, <diagnostics>, and geometry generation inside
+    //   <domain>.  These are the settings that replace the Python and MATLAB steps a
+    //   user used to run by hand before and after a simulation.
+    //
+    //   Read here, from a fresh XMLreader rather than threaded through
+    //   initialize_complab(), which already takes over sixty arguments by reference.
+    //   Every block is optional: with none of them present icfg keeps its defaults and
+    //   nothing below this point behaves differently.
+    // ============================================================================
+    integ::Config icfg;
+    {
+        XMLreader idoc("CompLaB.xml");
+        const std::string imsg = integ::readConfig(idoc, icfg);
+        if (!imsg.empty()) { pcout << imsg; return -1; }
+    }
+
+    //   <diagnostics>: the run's own scalar record.  Until now CompLB3D wrote VTI volumes and
+    //   nothing else, so answering "did mass balance?" or "how did porosity change?" meant
+    //   post-processing the volumes in Python.  With this block on, the run writes a summary
+    //   CSV as it goes and checks the conserved sums the user names.
+    //   Only rank 0 writes the file; the numbers are Palabos reductions and are already global.
+    //   Configured further down, once the output directory is known, so that summary.csv
+    //   lands beside the VTI files rather than in whatever directory the job was launched
+    //   from.  Declared here so it is in scope for the whole run.
+    complab_diag::Diagnostics diag;
 
     // ============================================================================
     // OPTIONAL METABOLIC LAYER -- flux balance analysis and surrogate models.
@@ -534,12 +569,171 @@ int main(int argc, char **argv) {
     //   FBA microbe (the XML that extractMM.py produces) and build the persistent
     //   solver state: one glp_prob* per GLPK microbe, or the cobra model objects.
     //   Both are created ONCE and reused at every voxel and every time step.
+    //   [NEW] Now that the output directory is known, point the summary CSV at it.
+    integ::setupDiagnostics(icfg, diag, global::mpi().isMainProcessor(), str_outputDir);
+
     char *pyFileName = (char*)"complab3d_cobrapy";
+
+    // ---- [NEW] <model_source>: find the genome-scale model before loading it -----
+    //   Bundled with the code, already in the cache, or downloaded -- in that order, and
+    //   only downloading if <allow_download> says so.  The file is checked against
+    //   models/manifest.txt and the run is told plainly if it is not the revision the
+    //   manifest describes.
+    //
+    //   Only rank 0 may write into the cache; the others wait at the barrier and then
+    //   find the file already there.
+    if (!icfg.modelSource.empty()) {
+        std::string mlog;
+        bool mfatal = false;
+        const std::string mpath = integ::resolveModel(icfg, "", global::mpi().isMainProcessor(),
+                                                      mlog, mfatal);
+        pcout << mlog;
+#ifdef PLB_MPI_PARALLEL
+        global::mpi().barrier();
+#endif
+        if (mfatal) return -1;
+
+        //   Give the resolved path to every FBA microbe that did not name its own file.
+        //   A microbe with an explicit <model_filename> keeps it, so a two-organism run
+        //   can mix a bundled model with a local one.
+        //   usesMetabolic, not usesFBA: a `surrogate` microbe is not an FBA microbe at run
+        //   time, but it still needs the model file if the surrogate is to be TRAINED from it.
+        plint adopted = 0;
+        for (plint iM = 0; iM < num_of_microbes; ++iM) {
+            if (!rxntype::usesMetabolic(reaction_type[iM])) continue;
+            if (!mmcfg.model_filename[iM].empty()) continue;
+            mmcfg.model_filename[iM] = mpath;
+            ++adopted;
+        }
+        if (adopted > 0)
+            pcout << "  [MODEL] " << adopted << " microbe(s) will use " << mpath << "\n";
+    }
+
     if (mmcfg.mm_count > 0) {
         if (load_metabolic_models3D(mmcfg, str_inputDir, reaction_type, num_of_microbes) != 0) return -1;
     }
     if (mmcfg.anyEnabled()) {
         if (setup_metabolic_solvers(mmcfg, reaction_type, num_of_microbes, pyFileName, src_path) != 0) return -1;
+    }
+
+    // ---- [NEW] <surrogate>: load the network, training it here if it is missing ----
+    //   srgNet must outlive the simulation, because complab_srg::registerNetwork() below
+    //   stores a pointer to it that defineSurrogateModel() follows at every voxel.  It is
+    //   declared in main()'s own scope for exactly that reason -- do not move it into the
+    //   block.
+    complab_srg::Network srgNet;
+#ifdef COMPLAB_ENABLE_GLPK
+    complab_srgtrain::GlpkContext srgCtx;
+    complab_srgtrain::StandaloneLp srgLp;      // released automatically after training
+#endif
+    if (icfg.srgEnabled) {
+        std::string slog;
+        complab_srg::FbaFn fba = 0;
+        void *fctx = 0;
+
+#ifdef COMPLAB_ENABLE_GLPK
+        //   Training needs a solver.  Two ways to get one:
+        //
+        //   a) the run already has a GLPK microbe.  Use ITS problem -- the same persistent
+        //      glp_prob the simulation will solve, so the network is fitted to exactly the
+        //      linear program that would otherwise run, <constraint_indices> and all.
+        //
+        //   b) it does not, which is the usual case for a surrogate-only run.  Build a
+        //      throwaway problem from the surrogate microbe's own model and release it as
+        //      soon as training is done.
+        //   Only go to the trouble of building an LP if there is nothing to load.
+        //   Without this test a run whose weights file already exists still parsed a
+        //   genome-scale model and built a linear program it then threw away.
+        bool haveWeights = false;
+        {
+            std::ifstream wf(icfg.srgWeights.c_str());
+            haveWeights = wf.good();
+        }
+
+        if (icfg.srgTrainIfMissing && !haveWeights) {
+            plint donor = -1;
+            for (plint iM = 0; iM < num_of_microbes; ++iM)
+                if (rxntype::usesGlpk(reaction_type[iM]) && mmcfg.vec_lp[iM] != 0) { donor = iM; break; }
+
+            if (donor >= 0) {
+                srgCtx.cfg = &mmcfg;
+                srgCtx.microbe = donor;
+                pcout << "  [SRG] training will sweep microbe" << donor
+                      << "'s metabolic model, the one this run already solves\n";
+            } else {
+                //   Which microbe are we training FOR?  <microbe> if the user said, otherwise
+                //   the first one whose reaction type is a surrogate type.
+                plint owner = icfg.srgMicrobe;
+                if (owner < 0)
+                    for (plint iM = 0; iM < num_of_microbes; ++iM)
+                        if (rxntype::usesSurrogate(reaction_type[iM])) { owner = iM; break; }
+
+                if (owner < 0 || owner >= num_of_microbes) {
+                    pcout << "  [SRG] <train_if_missing> is on but no microbe has "
+                          << "<reaction_type>surrogate</reaction_type>,\n"
+                          << "  [SRG] so there is nothing to train for. Set one, or name the microbe\n"
+                          << "  [SRG] with <surrogate><microbe>N</microbe>.\n";
+                    return -1;
+                }
+
+                pcout << "  [SRG] no GLPK microbe in this run; building a temporary linear program\n"
+                      << "  [SRG] from microbe" << owner << "'s own model, for training only.\n";
+                const std::string lerr = complab_srgtrain::buildTrainingLp(srgLp, mmcfg, owner,
+                                                                           str_inputDir,
+                                                                           num_of_substrates);
+                if (!lerr.empty()) { pcout << "  [SRG] " << lerr << "\n"; return -1; }
+                srgCtx.cfg = &srgLp.cfg;
+                srgCtx.microbe = 0;
+            }
+
+            const std::string berr = complab_srgtrain::bindInputs(srgCtx, icfg.srgTrain.inputs,
+                                                                  vec_subs_names);
+            if (!berr.empty()) { pcout << "  [SRG] " << berr << "\n"; return -1; }
+            fba  = &complab_srgtrain::solveWithUptake;
+            fctx = &srgCtx;
+        }
+#endif
+
+        const bool sok = integ::prepareSurrogate(icfg, srgNet, fba, fctx,
+                                                 global::mpi().isMainProcessor(), slog);
+        pcout << slog;
+        if (!sok) return -1;
+
+#ifdef PLB_MPI_PARALLEL
+        //   Only rank 0 trains, so every other rank now reads the file it wrote.  Training
+        //   on every rank would fit a different network per rank from a different random
+        //   start, and the domain would grow at a different rate in each subdomain.
+        global::mpi().barrier();
+        if (!global::mpi().isMainProcessor()) {
+            std::string serr;
+            if (!complab_srg::load(srgNet, icfg.srgWeights, &serr)) {
+                pcout << "  [SRG] rank could not read " << icfg.srgWeights << ": " << serr << "\n";
+                return -1;
+            }
+        }
+#endif
+#ifdef COMPLAB_ENABLE_GLPK
+        if (srgCtx.calls > 0)
+            pcout << "  [SRG] " << srgCtx.calls << " linear program(s) solved while training, "
+                  << srgCtx.infeasible << " infeasible\n";
+#endif
+
+        //   Work out which entry of the per-substrate flux vector feeds each network input.
+        //   The network records the substrate names it was trained on, so this is a name
+        //   match rather than an assumption about order -- see bindToSubstrates().
+        std::vector<int> srgSubs;
+        std::string sbwarn;
+        const std::string sberr = complab_srg::bindToSubstrates(srgNet, vec_subs_names,
+                                                                srgSubs, &sbwarn);
+        if (!sberr.empty()) {
+            pcout << "  [SRG] " << sberr << "\n";
+            return -1;
+        }
+        if (!sbwarn.empty()) pcout << sbwarn;
+
+        //   This is the line that makes <weights_file> do something: surrogateModel.hh asks
+        //   the registry for a network before it uses its own compiled-in weights.
+        complab_srg::registerNetwork((int) icfg.srgMicrobe, &srgNet, (int) num_of_microbes, srgSubs);
     }
 
     // ════════════════════════════════════════════════════════════════════════════
@@ -564,6 +758,43 @@ int main(int argc, char **argv) {
     T nsLatticeOmega = 1 / nsLatticeTau;
     T nsLatticeNu = NSDES<T>::cs2*(nsLatticeTau-0.5);
     char *ns_read_filename = strcat(strdup(str_inputDir.c_str()),ns_filename);
+
+    // ---- [NEW] generate or import the pore space, if the XML asks for it ---------
+    //   <generate> builds a packing, a fracture or a layered medium in place; <import_raw>
+    //   thresholds a binary volume from imaging.  Either way a .dat is written next to the
+    //   other inputs, so the run is reproducible from its own output and the generated
+    //   geometry can be inspected with the same tools as any other.
+    //
+    //   With neither tag present provideGeometry() returns an empty string and the file
+    //   named by <filename> is read exactly as before.
+    {
+        std::string glog;
+        bool gfatal = false;
+
+        //   THE GEOMETRY FILE IS nx-2 SLICES WIDE, NOT nx.
+        //   complab_functions.hh does `nx += 2` when it reads <nx>, and readGeometry() below
+        //   reads x = 1 .. nx-2 from the file and DUPLICATES the first and last slice into the
+        //   two ghost columns.  So the file the generator writes must have the width the user
+        //   asked for in the XML, which is nx-2 here.
+        //
+        //   Getting this wrong does not fail: readGeometry() would simply stop after nx-2
+        //   slices and quietly ignore the rest of a too-wide file, leaving the run with a
+        //   truncated pore space that still looks plausible.  The first real build caught it
+        //   as a four-voxel disagreement between the porosity the generator reported and the
+        //   porosity the run counted.
+        const std::string gpath = integ::provideGeometry(icfg, (int) (nx - 2), (int) ny, (int) nz,
+                                                         str_inputDir, glog, gfatal);
+        pcout << glog;
+        if (gfatal) {
+            //   A sealed pore space is not a well-posed problem: a pressure drop across it has
+            //   no solution, and the flow solver would spend its whole iteration budget failing
+            //   to converge to one.  Better to say so now.
+            pcout << "  [GEOM] the geometry is unusable; stopping before the flow solver.\n";
+            return -1;
+        }
+        if (!gpath.empty() && gpath.size() > str_inputDir.size())
+            geom_filename = gpath.substr(str_inputDir.size());
+    }
 
     pcout << "  [GEOM] Reading " << geom_filename << "...\n";
     MultiScalarField3D<int> geometry(nx,ny,nz);
@@ -1100,12 +1331,22 @@ int main(int argc, char **argv) {
             if (vec_immobile[iS]) continue;   // [immobile] no advection coupling
             latticeToPassiveAdvDiff(nsLattice, vec_substr_lattices[iS], vec_substr_lattices[iS].getBoundingBox());
         }
-        tmpIT0=0;
+        // [FIX-3D] SEGFAULT.  This loop indexed vec_bFree_lattices with a counter that
+        //   advanced once per LBM microbe, but that vector is sized bfree_count and holds
+        //   only the PLANKTONIC microbes.  A run with a biofilm organism whose
+        //   <solver_type> is LBM -- example 08 is exactly that -- indexed past the end of an
+        //   often EMPTY vector and crashed here, after several minutes of flow solving.
+        //
+        //   Two things were wrong and both are fixed by walking the free microbes instead:
+        //   the index now matches how the vector was filled (the same tmpIT0/tmpIT1 pairing
+        //   used by the checkpoint loader below), and biofilm biomass is skipped, which is
+        //   correct on its own terms -- attached biomass does not advect with the flow.
+        tmpIT1=0;
         for (plint iM = 0; iM < num_of_microbes; ++iM) {
-            if (solver_type[iM] == 3) {
-                latticeToPassiveAdvDiff(nsLattice, vec_bFree_lattices[tmpIT0], vec_bFree_lattices[tmpIT0].getBoundingBox());
-                ++tmpIT0;
-            }
+            if (bmass_type[iM]==1) continue;              // biofilm: fixed in place, never advected
+            if (solver_type[iM] == 3)
+                latticeToPassiveAdvDiff(nsLattice, vec_bFree_lattices[tmpIT1], vec_bFree_lattices[tmpIT1].getBoundingBox());
+            ++tmpIT1;                                     // advances for every free microbe, coupled or not
         }
         pcout << "  [ADE] Stabilizing (10000 iter)...\n";
         for (plint iT=0; iT<10000; ++iT) {
@@ -1447,6 +1688,68 @@ int main(int argc, char **argv) {
             }
 
             pcout << "└─────────────────────────────────────────────────────────────────────────┘\n";
+        }
+
+        // ════════════════════════════════════════════════════════════════════════
+        // [NEW] <diagnostics>: one row of the summary CSV, and the conservation checks.
+        //
+        //   computeSum/Min/Max are Palabos reductions and are already global, which is
+        //   what complab_diag::Diagnostics expects -- it knows nothing about MPI, which
+        //   is what lets it be tested against synthetic fields.
+        //
+        //   <interval> overrides the VTI interval; 0 means "follow the VTI interval",
+        //   because a scalar row is cheap and there is rarely a reason to want fewer of
+        //   them than there are volumes.
+        // ════════════════════════════════════════════════════════════════════════
+        if (diag.active()) {
+            const plint diagEvery = (icfg.diagInterval > 0) ? (plint) icfg.diagInterval
+                                                            : (ade_VTI_iTer > 0 ? ade_VTI_iTer : 0);
+            if (diagEvery > 0 && iT % diagEvery == 0) {
+                complab_diag::Row row;
+                row.iteration = (long) iT;
+
+                //   EVERYTHING IS MEASURED OVER x = 1 .. nx-2, NOT THE WHOLE FIELD.
+                //   readGeometry() duplicates the first and last slice of the file into the two
+                //   ghost columns 0 and nx-1, so a reduction over the full bounding box counts
+                //   the inlet and outlet slices twice.  For porosity that is a cosmetic error;
+                //   for a conserved sum it is not -- the total would jump whenever the inlet
+                //   concentration changed, and the mass-balance check would blame the chemistry.
+                //   This is the same box saveGeometry() and the permeability calculation use.
+                const Box3D physicalDomain(1, nx-2, 0, ny-1, 0, nz-1);
+
+                //   "Open" is every material a solute can occupy: the pore materials and the
+                //   biofilm materials.  Counting only the pore materials would make porosity
+                //   fall as biofilm grows and would divide the substrate totals by the wrong
+                //   volume, so the reported mean concentration would drift for a reason that
+                //   has nothing to do with chemistry.
+                //   The two lists can name the same material, so collect the distinct numbers
+                //   first -- counting the same material twice would report a porosity above 1.
+                std::vector<plint> openMat(pore_dynamics);
+                for (size_t iB = 0; iB < bio_dynamics.size(); ++iB)
+                    openMat.insert(openMat.end(), bio_dynamics[iB].begin(), bio_dynamics[iB].end());
+                std::sort(openMat.begin(), openMat.end());
+                openMat.erase(std::unique(openMat.begin(), openMat.end()), openMat.end());
+
+                plint openCount = 0;
+                for (size_t k = 0; k < openMat.size(); ++k)
+                    openCount += MaskedScalarCounts3D(physicalDomain, geometry, openMat[k]);
+                row.openVoxels = (long) openCount;
+
+                const double totalVoxels = (double) (nx - 2) * (double) ny * (double) nz;
+                row.porosity = (totalVoxels > 0) ? (double) row.openVoxels / totalVoxels : 0.0;
+
+                for (plint iS = 0; iS < num_of_substrates; ++iS) {
+                    complab_diag::FieldStat st;
+                    st.name  = vec_subs_names[iS];
+                    st.total = (double) computeSum(*computeDensity(vec_substr_lattices[iS]), physicalDomain);
+                    st.minv  = (double) computeMin(*computeDensity(vec_substr_lattices[iS]), physicalDomain);
+                    st.maxv  = (double) computeMax(*computeDensity(vec_substr_lattices[iS]), physicalDomain);
+                    st.mean  = (row.openVoxels > 0) ? st.total / (double) row.openVoxels : 0.0;
+                    row.fields.push_back(st);
+                }
+                const std::string dmsg = diag.record(row);
+                if (!dmsg.empty()) pcout << dmsg;
+            }
         }
 
         // CA biomass expansion
@@ -1955,6 +2258,12 @@ int main(int argc, char **argv) {
     }
 
     if (useEquilibrium) eqSolver.printStatistics();
+
+    // [NEW] The scalar record's closing report: where summary.csv is, and whether any of the
+    //   conserved sums drifted.  Then the surrogate's own account of how often it had to clamp
+    //   to its training box -- both print nothing at all when the feature was off.
+    if (diag.active()) pcout << diag.finalReport();
+    pcout << complab_srg::runtimeReport();
 
     // Free allocated memory
     // Optional metabolic layer: delete the GLPK problems / release the cobra
