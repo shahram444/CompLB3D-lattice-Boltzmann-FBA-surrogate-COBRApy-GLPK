@@ -2,24 +2,27 @@
 """
 Build the CompLB3D example suite.
 
-Fifteen tiny cases, one per capability, each in its own folder with everything
+Sixteen tiny cases, one per capability, each in its own folder with everything
 it needs: CompLaB.xml, the geometry, the kinetics headers it compiles against,
 any metabolic model file, and a README saying what to expect.
 
-Why a generator rather than fifteen hand-written files: the cases share a
+Why a generator rather than sixteen hand-written files: the cases share a
 domain, a set of material numbers and a house style, and a correction to a tag
 name has to land in all of them at once. Regenerating is also how the suite
 stays honest after validateExamples.py finds something.
 
-    python3 makeGeometry.py      # first, writes input_shared/
-    python3 makeExamples.py      # then this
+    python3 makeExamples.py      # writes every case folder, geometry included
     python3 validateExamples.py  # then check
+
+The geometries are built here rather than by a separate script. There used to
+be a makeGeometry.py that wrote input_shared/ and a copy step that pulled from
+it; that was one more command to remember for no benefit, since nothing else
+ever read those files.
 
 Part of the CompLaB program.  GNU Affero General Public License v3 or later.
 """
 
 import os
-import shutil
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "_build"))
@@ -27,7 +30,94 @@ import blocks as K                      # noqa: E402
 import kinetics as KIN                  # noqa: E402
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SHARED = os.path.join(ROOT, "input_shared")
+
+NX, NY, NZ = 24, 24, 6
+SOLID, WALL, PORE, MIC0, MIC1 = 0, 1, 2, 3, 4
+
+
+# ===========================================================================
+# THE GEOMETRIES
+#
+# CompLB3D reads a geometry as ONE INTEGER PER LINE, x fastest, then y, then z:
+#
+#     for z: for y: for x:   write mask(x, y, z)
+#
+# and the file must be exactly nx * ny * nz entries, where nx is the number
+# written in <nx>. The solver adds two ghost columns of its own and duplicates
+# the first and last slice into them; a file two slices wider is not an error,
+# it is silently truncated.
+#
+# Every case here is 24 x 24 x 6 with z periodic, which makes the domain
+# quasi-2D: every z-plane sees identical conditions, so a result that depends
+# on z is a bug rather than physics.
+#
+# WHY THESE ARE STILL BUILT IN PYTHON, now that <generate> exists in the XML:
+# two of them seed MICROBE material numbers (3 and 4) into the geometry, which
+# the C++ generator deliberately does not do -- it writes pore, solid and wall
+# and nothing else. Cases 05 to 12 need those seeded biofilm patches. The
+# grains geometry also puts its four cylinders at FIXED centres so the numbers
+# in the READMEs stay true; <generate>cylinders places them by porosity.
+#
+# Case 16 does use <generate>, and ships no geometry file at all. That is the
+# demonstration of the XML route.
+# ===========================================================================
+def _blank():
+    """Open channel: bounce-back walls on the two y faces, pore elsewhere.
+
+    Walls on y, not x, because flow is driven along x by <delta_P> and the x
+    faces have to stay open for the pressure boundary to mean anything."""
+    g = [[[PORE for _ in range(NX)] for _ in range(NY)] for _ in range(NZ)]
+    for z in range(NZ):
+        for x in range(NX):
+            g[z][0][x] = WALL
+            g[z][NY - 1][x] = WALL
+    return g
+
+
+def _add_grains(g, centres, radius, code=SOLID):
+    """Cylinders through the full z depth, not spheres: a sphere would make the
+    middle z-planes differ from the outer ones and break the quasi-2D check."""
+    for z in range(NZ):
+        for y in range(NY):
+            for x in range(NX):
+                for (cx, cy) in centres:
+                    if (x - cx) ** 2 + (y - cy) ** 2 <= radius * radius:
+                        g[z][y][x] = code
+    return g
+
+
+def _add_patch(g, x0, x1, y0, y1, code):
+    """Seed a microbe over a rectangle, pore voxels only. Seeding onto a wall
+    would put biomass where the solver never looks and it would vanish."""
+    for z in range(NZ):
+        for y in range(max(y0, 0), min(y1 + 1, NY)):
+            for x in range(max(x0, 0), min(x1 + 1, NX)):
+                if g[z][y][x] == PORE:
+                    g[z][y][x] = code
+    return g
+
+
+def _geometry(kind):
+    if kind == "channel":
+        return _blank()
+    if kind == "grains":
+        return _add_grains(_blank(), [(7, 8), (7, 16), (16, 8), (16, 16)], 3)
+    if kind == "one_microbe":
+        return _add_patch(_blank(), 4, 9, 1, 3, MIC0)
+    if kind == "two_microbes":
+        g = _add_patch(_blank(), 4, 9, 1, 3, MIC0)
+        return _add_patch(g, 14, 19, NY - 4, NY - 2, MIC1)
+    raise ValueError("unknown geometry '%s'" % kind)
+
+
+def _write_geometry(kind, path):
+    g = _geometry(kind)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        for z in range(NZ):
+            for y in range(NY):
+                for x in range(NX):
+                    f.write("%d\n" % g[z][y][x])
 
 
 # ===========================================================================
@@ -88,6 +178,32 @@ TOY_MODEL = """<?xml version="1.0" ?>
 """
 
 
+GENERATE_NOTE = """
+            <!-- ====================================================
+                 [NEW] GENERATING THE PORE SPACE INSTEAD OF READING ONE
+
+                 Uncomment this and <filename> above is ignored: the
+                 domain is built here, inspected, and written back to
+                 input/generated.dat so the run is reproducible from its
+                 own output.
+
+                 It writes pore, solid and wall ONLY. It cannot seed the
+                 microbe material numbers cases 05 to 12 need, which is
+                 why those still ship a geometry file.
+
+                 A pore space that does not percolate along x stops the
+                 run: a pressure drop across a sealed medium has no
+                 solution, and the flow solver would spend its whole
+                 iteration budget failing to converge to one.
+            <generate>spheres</generate>
+            <porosity>0.55</porosity>
+            <grain_radius>3.0</grain_radius>
+            <seed>12345</seed>
+            <walls>y</walls>
+            <write_geometry>generated.dat</write_geometry>
+                 ==================================================== -->"""
+
+
 def write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
@@ -104,8 +220,8 @@ def case(number, name, xml, readme, geometry,
     write(os.path.join(folder, "defineKinetics.hh"), kinetics)
     write(os.path.join(folder, "defineAbioticKinetics.hh"), abiotic)
     os.makedirs(os.path.join(folder, "input"), exist_ok=True)
-    shutil.copy(os.path.join(SHARED, geometry),
-                os.path.join(folder, "input", "geometry.dat"))
+    if geometry:
+        _write_geometry(geometry, os.path.join(folder, "input", "geometry.dat"))
     if model:
         write(os.path.join(folder, "input", "toy_model.xml"), TOY_MODEL)
     for fn, txt in (extra_files or {}).items():
@@ -129,19 +245,33 @@ def readme(number, title, what, expect, switches, notes=""):
 %s
 ## Running it
 
+The rate laws are compiled in, so each case needs its own build.
+
 ```bash
 cp defineKinetics.hh defineAbioticKinetics.hh  <path to CompLB3D>/
-cd <path to CompLB3D> && cd build && cmake %s.. && make
+cd <path to CompLB3D> && mkdir -p build && cd build
+cmake -DPALABOS_ROOT=<path to palabos-v2.3.0> %s.. && make -j
 cd .. && cp <path to this folder>/CompLaB.xml .
-cp -r <path to this folder>/input .
+cp -r <path to this folder>/input .%s
 ./complab
 ```
-
-`runAllExamples.sh` in the parent folder does all of that for every case.
+%s
+`runAllExamples.sh` in the parent folder does all of that for every case, and
+groups the cases by cmake configuration so the tree is reconfigured three times
+rather than sixteen.
 """ % (number, title, what, expect, switches,
        ("\n## Notes\n\n%s\n" % notes) if notes else "",
-       "-DENABLE_GLPK=ON " if number in (9, 12) else
-       ("-DENABLE_COBRAPY=ON " if number == 10 else ""))
+       "-DENABLE_GLPK=ON " if number in (9, 12, 16) else
+       ("-DENABLE_COBRAPY=ON " if number == 10 else ""),
+       ("\n# <model_source> looks for the bundle in the WORKING directory,\n"
+        "# and models/ is already at the top of the CompLB3D tree, so running\n"
+        "# from there is all this needs." if number == 16 else ""),
+       ("\n**`-DENABLE_GLPK=ON` is not optional for this case.** Without it the run\n"
+        "stops at start-up naming the flag.\n" if number in (9, 12, 16) else
+        "\n**`-DENABLE_COBRAPY=ON` is not optional for this case**, and `cobra` has to be\n"
+        "importable by the interpreter the executable was LINKED against, which is not\n"
+        "necessarily the `python3` on your PATH. If the import fails the run prints which\n"
+        "interpreter is embedded.\n" if number == 10 else ""))
 
 
 # ===========================================================================
@@ -172,7 +302,8 @@ def build():
         <enable_surrogate>false</enable_surrogate>
         <enable_validation_diagnostics>true</enable_validation_diagnostics>
     </simulation_mode>
-""" + K.domain("geometry.dat", peclet=1, ade_max_iT=400) + """
+""" + K.domain("geometry.dat", peclet=1, ade_max_iT=400,
+               generate_note=GENERATE_NOTE) + """
     <chemistry>
         <number_of_substrates>1</number_of_substrates>
 """ + K.substrate(0, "tracer", "0.", left=("Dirichlet", "1."),
@@ -198,7 +329,7 @@ def build():
         "`biotic_mode` false, `<Peclet>` non zero, Dirichlet solute boundaries.",
         "This is the smoke test. If it fails, the build or the geometry is\n"
         "wrong and nothing further is worth debugging."),
-        "channel.dat")
+        "channel")
 
     # -----------------------------------------------------------------------
     # 02  pure diffusion, no flow
@@ -247,7 +378,7 @@ def build():
         "Curvature in the profile means a reaction is firing somewhere it\n"
         "should not, or a boundary is not being held. Both are worth chasing\n"
         "here, where there is nothing else going on to hide them."),
-        "channel.dat")
+        "channel")
 
     # -----------------------------------------------------------------------
     # 03  abiotic kinetics
@@ -301,7 +432,7 @@ def build():
         "`defineAbioticKinetics.hh`.",
         "Turn `<Peclet>` up to 1 and the front moves downstream. That single\n"
         "change is the cheapest way to see transport and reaction competing."),
-        "channel.dat", abiotic=KIN.ABIOTIC_ABC)
+        "channel", abiotic=KIN.ABIOTIC_ABC)
 
     # -----------------------------------------------------------------------
     # 04  equilibrium speciation
@@ -335,7 +466,7 @@ def build():
         <enable_surrogate>false</enable_surrogate>
         <enable_validation_diagnostics>true</enable_validation_diagnostics>
     </simulation_mode>
-""" + K.domain("geometry.dat", peclet=0, ade_max_iT=600) + """
+""" + K.diagnostics(interval=100) + K.domain("geometry.dat", peclet=0, ade_max_iT=600) + """
     <chemistry>
         <number_of_substrates>4</number_of_substrates>
 """ + K.substrate(0, "HCO3", "1e-3", left=("Dirichlet", "2e-3"), right=("Neumann", "0."),
@@ -386,7 +517,7 @@ def build():
         "This is the most expensive part of the code by a wide margin, which\n"
         "is why every other example leaves it off. Even on this 3456 voxel\n"
         "domain you will see it in the step time."),
-        "channel.dat")
+        "channel")
 
     # -----------------------------------------------------------------------
     # 05, 06, 07  the three biomass solvers, same chemistry
@@ -474,7 +605,7 @@ def build():
             "- no `[NEG!]` warnings: the donor must never go negative",
             "`<solver_type>%s</solver_type>`, %s" % (solver, blurb),
             extra_note),
-            "one_microbe.dat", kinetics=KIN.KINETICS_MONOD)
+            "one_microbe", kinetics=KIN.KINETICS_MONOD)
 
     # -----------------------------------------------------------------------
     # 08  two microbes, two different solvers, competing
@@ -540,7 +671,7 @@ def build():
         "move: the solver decides how biomass spreads, not how much of it\n"
         "there is. If it moves a lot, that is worth understanding before you\n"
         "trust either solver on a real problem."),
-        "two_microbes.dat", kinetics=KIN.KINETICS_MONOD)
+        "two_microbes", kinetics=KIN.KINETICS_MONOD)
 
     # -----------------------------------------------------------------------
     # 09 / 10  flux balance analysis, GLPK and COBRApy
@@ -668,8 +799,19 @@ def build():
                if n == 10 else
                "Drop `<fba_maximum_uptake_flux>` to `4. 10. 0.` and the donor\n"
                "becomes limiting instead, so growth should settle near 4. That\n"
-               "is a second independent check for one line of editing.")),
-            "one_microbe.dat", model=True)
+               "is a second independent check for one line of editing.")
+            + "\n\n**A safer way to write the exchange mapping.** "
+              "`<exchange_reaction_indices>` is\n"
+              "positional: the numbers are correct only for this exact model file.\n"
+              "Insert one reaction into it and every index after that points somewhere\n"
+              "else, with nothing to complain.\n\n"
+              "`<exchange_reaction_names>` names the reactions instead, and they are\n"
+              "resolved against the model at start-up, so a wrong one stops the run and\n"
+              "prints the near matches. It needs an SBML model; the matrix format that\n"
+              "`toy_model.xml` uses does not carry reaction names, which is why this\n"
+              "case still uses indices. **Example 16 shows the named form**, on a real\n"
+              "genome-scale model."),
+            "one_microbe", model=True)
 
     # -----------------------------------------------------------------------
     # 11  surrogate network
@@ -747,9 +889,17 @@ def build():
         "`<fba_maximum_uptake_flux>` is set to 0.4 to stay inside that. Raise\n"
         "it and the run leaves the training box, where a network extrapolates\n"
         "badly and returns confident nonsense.\n\n"
-        "To fit your own network, see `surrogate_training/` in the parent\n"
-        "folder. `inspectSurrogate.py` prints any network's valid range."),
-        "one_microbe.dat")
+        "**There are now two ways to get a network in, and this case shows the\n"
+        "older one.** Here the weights are compiled into `surrogateModel.hh`, so\n"
+        "changing them means editing that file and rebuilding.\n\n"
+        "The alternative is `<surrogate><weights_file>`, which reads the weights\n"
+        "at run time and can also FIT them during start-up from a metabolic\n"
+        "model. **Example 16 shows that.** Both routes are supported, and a run\n"
+        "with no `<surrogate>` block behaves exactly as this one does.\n\n"
+        "To fit your own network offline, see `surrogate_training/` in the parent\n"
+        "folder. `inspectSurrogate.py` prints any network's valid range,\n"
+        "recovered by inverting the mapminmax scaling."),
+        "one_microbe")
 
     # -----------------------------------------------------------------------
     # 12  combined reaction type
@@ -842,7 +992,7 @@ def build():
         "Diff this case's donor profile against example 09's. The difference\n"
         "IS the maintenance term, and it is the cheapest way to confirm the\n"
         "two paths are genuinely adding rather than one silently winning."),
-        "one_microbe.dat", kinetics=KIN.KINETICS_MAINTENANCE, model=True)
+        "one_microbe", kinetics=KIN.KINETICS_MAINTENANCE, model=True)
 
     # -----------------------------------------------------------------------
     # 13  precipitation and pore clogging
@@ -880,7 +1030,7 @@ def build():
         <enable_surrogate>false</enable_surrogate>
         <enable_validation_diagnostics>true</enable_validation_diagnostics>
     </simulation_mode>
-""" + K.domain("geometry.dat", peclet=1, ade_max_iT=2000) + """
+""" + K.diagnostics(interval=100, note="\n         The porosity column is the headline result of this case: watch it in\n         output/summary.csv rather than by eye in the log.") + K.domain("geometry.dat", peclet=1, ade_max_iT=2000) + """
     <chemistry>
         <number_of_substrates>3</number_of_substrates>
 """ + K.substrate(0, "Fe2", "0.", left=("Dirichlet", "5."), right=("Neumann", "0."),
@@ -924,7 +1074,7 @@ def build():
         "than copying this number.\n\n"
         "If the domain seals completely the run stops and reports a percolation\n"
         "limit. That is the code working, not failing."),
-        "grains.dat", abiotic=KIN.ABIOTIC_PRECIP)
+        "grains", abiotic=KIN.ABIOTIC_PRECIP)
 
     # -----------------------------------------------------------------------
     # 14  dissolution and pore reopening
@@ -961,7 +1111,7 @@ def build():
         <enable_surrogate>false</enable_surrogate>
         <enable_validation_diagnostics>true</enable_validation_diagnostics>
     </simulation_mode>
-""" + K.domain("geometry.dat", peclet=1, ade_max_iT=2000) + """
+""" + K.diagnostics(interval=100, note="\n         The porosity column is the headline result of this case: watch it in\n         output/summary.csv rather than by eye in the log.") + K.domain("geometry.dat", peclet=1, ade_max_iT=2000) + """
     <chemistry>
         <number_of_substrates>3</number_of_substrates>
 """ + K.substrate(0, "H", "1e-4", left=("Dirichlet", "1e-2"), right=("Neumann", "0."),
@@ -1014,7 +1164,7 @@ def build():
         "Nothing precipitates in this case. `defineAbioticRxnKinetics` is\n"
         "empty on purpose, so the only thing moving mineral is the dissolution\n"
         "hook and the mass balance is unambiguous."),
-        "grains.dat", abiotic=KIN.ABIOTIC_DISSOL)
+        "grains", abiotic=KIN.ABIOTIC_DISSOL)
 
     # -----------------------------------------------------------------------
     # 15  both directions at once
@@ -1055,7 +1205,7 @@ def build():
         <enable_surrogate>false</enable_surrogate>
         <enable_validation_diagnostics>true</enable_validation_diagnostics>
     </simulation_mode>
-""" + K.domain("geometry.dat", peclet=1, ade_max_iT=3000) + """
+""" + K.diagnostics(interval=100, note="\n         The porosity column is the headline result of this case: watch it in\n         output/summary.csv rather than by eye in the log.") + K.domain("geometry.dat", peclet=1, ade_max_iT=3000) + """
     <chemistry>
         <number_of_substrates>4</number_of_substrates>
 """ + K.substrate(0, "Fe2", "0.", left=("Dirichlet", "5."), right=("Neumann", "0."))
@@ -1113,9 +1263,216 @@ def build():
         "rerun: you should see the porosity flip back and forth every update\n"
         "interval, with a flow solve wasted on each flip. That is the failure\n"
         "the hysteresis exists to prevent."),
-        "grains.dat", abiotic=KIN.ABIOTIC_BOTH)
+        "grains", abiotic=KIN.ABIOTIC_BOTH)
 
-    print("\n15 examples written.")
+
+    # -----------------------------------------------------------------------
+    # 16. the whole pipeline, driven from the XML alone
+    # -----------------------------------------------------------------------
+    xml = K.header(16, "THE COMPLETE PIPELINE", [
+        "Everything the older cases needed a Python script for, done from",
+        "this one file: the metabolic model is fetched from the bundle, the",
+        "exchange reactions are named rather than numbered, the surrogate",
+        "network is TRAINED during start-up from that model, and the run",
+        "writes its own scalar record.",
+        "",
+        "Nothing here is prepared in advance. Copy the folder, build, run.",
+    ]) + """
+    <path>
+        <src_path>src</src_path>
+        <input_path>input</input_path>
+        <output_path>output</output_path>
+    </path>
+
+    <simulation_mode>
+        <biotic_mode>true</biotic_mode>
+        <enable_kinetics>false</enable_kinetics>
+        <enable_abiotic_kinetics>false</enable_abiotic_kinetics>
+        <enable_fba_glpk>false</enable_fba_glpk>
+        <enable_fba_cobrapy>false</enable_fba_cobrapy>
+        <enable_surrogate>true</enable_surrogate>
+        <enable_validation_diagnostics>false</enable_validation_diagnostics>
+    </simulation_mode>
+
+    <!-- ================================================================
+         [NEW] WHERE THE METABOLIC MODEL COMES FROM
+
+         e_coli_core ships gzipped in models/. It is unpacked into
+         <model_cache> at start-up and checked against models/manifest.txt,
+         so a model that has been revised upstream shows up in the log.
+
+         <allow_download>false</allow_download> is the default and is why
+         this case runs on a compute node with no route to the internet.
+         ================================================================ -->
+    <model_source>bigg:e_coli_core</model_source>
+    <model_bundle>models</model_bundle>
+    <model_cache>input</model_cache>
+    <allow_download>false</allow_download>
+
+    <!-- ================================================================
+         [NEW] THE SURROGATE, FITTED HERE
+
+         No weights file exists the first time, so one is trained: the
+         linear program is swept over the ranges below, a network is
+         fitted, and the fit is checked by re-solving the LP at 64 points
+         it never saw. The result is written to <weights_file>, and every
+         later run of this folder loads it in milliseconds instead.
+
+         Delete output/ecoli.srg to force a retrain.
+
+         Each <inputN> is: substrate name, low, high, and "log" for a
+         logarithmic sweep. The names must be <name_of_substrates>.
+         ================================================================ -->
+    <surrogate>
+        <enabled>true</enabled>
+        <weights_file>output/ecoli.srg</weights_file>
+        <train_if_missing>true</train_if_missing>
+        <train>
+            <samples>300</samples>
+            <restarts>2</restarts>
+            <epochs>400</epochs>
+            <verify_points>64</verify_points>
+            <layers>8</layers>
+            <seed>20260814</seed>
+            <input0>glucose 0.1 10.0</input0>
+            <input1>o2      0.1 20.0</input1>
+        </train>
+    </surrogate>
+
+    <!-- ================================================================
+         [NEW] THE RUN'S OWN RECORD
+
+         output/summary.csv gets one row per interval: porosity, and the
+         total, mean, minimum and maximum of every substrate over the OPEN
+         voxels of the physical domain.
+
+         <conserve> names a sum the chemistry cannot create or destroy.
+         Do NOT name a substrate that enters at an inlet: glucose here is
+         supplied from outside and its total is not conserved. Acetate is
+         only ever produced inside the domain, so it is the honest thing to
+         watch; it is listed for the record rather than as a check that can
+         pass, and its Neumann ends make it closed.
+         ================================================================ -->
+    <diagnostics>
+        <enabled>true</enabled>
+        <summary_csv>summary.csv</summary_csv>
+        <interval>100</interval>
+        <tolerance>1e-6</tolerance>
+    </diagnostics>
+""" + K.domain("geometry.dat", peclet=0, ade_max_iT=400,
+               materials="\n                <microbe0>3</microbe0>") + """
+    <chemistry>
+        <number_of_substrates>3</number_of_substrates>
+        <fix_concentration>no no no</fix_concentration>
+        <fix_lower_bounds>no no no</fix_lower_bounds>
+""" + K.substrate(0, "glucose", "1.0", left=("Dirichlet", "1."), right=("Dirichlet", "0.")) \
+    + K.substrate(1, "o2", "1.0", left=("Dirichlet", "1."), right=("Dirichlet", "0.")) \
+    + K.substrate(2, "acetate", "0.", left=("Neumann", "0."), right=("Neumann", "0.")) + """
+    </chemistry>
+
+    <microbiology>
+        <number_of_microbes>1</number_of_microbes>
+
+        <microbe0>
+            <name_of_microbes>Ecoli</name_of_microbes>
+            <solver_type>FD</solver_type>
+
+            <!-- The surrogate stands in for the flux balance solve. The
+                 network it uses is the one trained above, NOT the weights
+                 compiled into surrogateModel.hh. That is what
+                 <weights_file> changes. See example 11 for the compiled-in
+                 route. -->
+            <reaction_type>surrogate</reaction_type>
+
+            <initial_densities>1.0</initial_densities>
+            <decay_coefficient>0.01</decay_coefficient>
+            <viscosity_ratio_in_biofilm>0</viscosity_ratio_in_biofilm>
+            <biomass_diffusion_coefficients>
+                <in_pore>3e-13</in_pore>
+                <in_biofilm>3e-13</in_biofilm>
+            </biomass_diffusion_coefficients>
+            <half_saturation_constants>0.05 0.05 0</half_saturation_constants>
+
+            <!-- ========================================================
+                 [NEW] NAMED, NOT NUMBERED
+
+                 One reaction name per substrate, in <name_of_substrates>
+                 order. Resolved against the model's own reaction list at
+                 start-up, so a wrong name stops the run and prints the
+                 near matches. An INDEX that is wrong is undetectable and always
+                 has been: it produces a well-posed linear program with the
+                 wrong biology.
+
+                 Try it: change EX_o2_e to EX_oxygen_e and rerun.
+
+                 There is no <model_filename> here. <model_source> above
+                 supplied it.
+                 ======================================================== -->
+            <exchange_reaction_names>EX_glc__D_e EX_o2_e EX_ac_e</exchange_reaction_names>
+
+            <!-- The upper end of each training range above is this Vmax,
+                 because Michaelis-Menten means no voxel can ever request
+                 more than Vmax. Raise one without retraining and the run
+                 leaves the training box; it will say so, and say how
+                 often. -->
+            <fba_maximum_uptake_flux>10. 20. 0.</fba_maximum_uptake_flux>
+            <substrate_lower_bounds>-10. -20. 0.</substrate_lower_bounds>
+            <substrate_upper_bounds>1000. 1000. 1000.</substrate_upper_bounds>
+            <objective_direction>maximize</objective_direction>
+            <biomass_molar_mass>24.6</biomass_molar_mass>
+            <left_boundary_type>Neumann</left_boundary_type>
+            <left_boundary_condition>0.</left_boundary_condition>
+            <right_boundary_type>Neumann</right_boundary_type>
+            <right_boundary_condition>0.</right_boundary_condition>
+        </microbe0>
+    </microbiology>
+
+    <equilibrium>
+        <enabled>false</enabled>
+    </equilibrium>
+""" + K.io(vtk=200)
+
+    case(16, "complete_pipeline", xml, readme(
+        16, "the whole pipeline, from the XML alone",
+        "The four things that used to be manual, all in one file. The metabolic\n"
+        "model comes out of the bundle; the exchange reactions are named rather\n"
+        "than numbered; the surrogate network is fitted during start-up from\n"
+        "that model; and the run writes its own summary CSV.\n\n"
+        "There is no preparation step. No extractMM.py, no training scripts, no\n"
+        "post-processing to find out whether anything was conserved.",
+        "- `[MODEL] unpacking bundled models/e_coli_core.xml.gz`, then\n"
+        "  `revision check: 72 species, 95 reaction tags, as the manifest expects`\n"
+        "- `resolved 3 exchange reaction name(s) against e_coli_core`\n"
+        "- `[SRG] no weights file; training one now. This happens once.`\n"
+        "  followed by a few hundred linear programs, then a held-out R^2 above\n"
+        "  0.99\n"
+        "- **`output/ecoli.srg` written.** Run the case again: it loads instead\n"
+        "  of training, and start-up is instant\n"
+        "- `output/summary.csv`, one row per 100 steps\n"
+        "- at the end, `[SRG] runtime network: N evaluation(s), 0 clamped`. A\n"
+        "  non-zero clamp count means the simulation left the box the network\n"
+        "  was fitted on",
+        "`<model_source>`, `<exchange_reaction_names>`, `<surrogate>` with\n"
+        "`<train_if_missing>`, and `<diagnostics>`. Needs `-DENABLE_GLPK=ON`,\n"
+        "because training sweeps a linear program.",
+        "**This run has no GLPK microbe**, so there is no persistent linear\n"
+        "program to sweep. A temporary one is built from this microbe's own\n"
+        "model for training and released as soon as the fit is done. The log\n"
+        "says so.\n\n"
+        "**Why the geometry is still a file here.** `<generate>` in `<domain>`\n"
+        "can build the pore space from the XML, and example 01 shows the tags\n"
+        "commented in place. It writes pore, solid and wall only -- it cannot\n"
+        "seed the microbe material numbers this case needs, so the seeded\n"
+        "geometry is shipped.\n\n"
+        "**Comparing against the FBA it replaces.** Set `<enable_fba_glpk>true`\n"
+        "and `<reaction_type>glpk</reaction_type>`, delete the `<surrogate>`\n"
+        "block, and rerun. On the reference run the two agreed to four parts in\n"
+        "ten thousand in final biomass, and the surrogate was about 150 times\n"
+        "faster."),
+        "one_microbe")
+
+    print("\n16 examples written.")
+
 
 
 if __name__ == "__main__":

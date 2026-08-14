@@ -24,17 +24,32 @@ shipped network has never seen a Fe(III) uptake above 0.5 mmol/gDW/h.
 it and the run leaves the training box, where a network extrapolates
 badly and returns confident nonsense.
 
-To fit your own network, see `surrogate_training/` in the parent
-folder. `inspectSurrogate.py` prints any network's valid range.
+**There are now two ways to get a network in, and this case shows the
+older one.** Here the weights are compiled into `surrogateModel.hh`, so
+changing them means editing that file and rebuilding.
+
+The alternative is `<surrogate><weights_file>`, which reads the weights
+at run time and can also FIT them during start-up from a metabolic
+model. **Example 16 shows that.** Both routes are supported, and a run
+with no `<surrogate>` block behaves exactly as this one does.
+
+To fit your own network offline, see `surrogate_training/` in the parent
+folder. `inspectSurrogate.py` prints any network's valid range,
+recovered by inverting the mapminmax scaling.
 
 ## Running it
 
+The rate laws are compiled in, so each case needs its own build.
+
 ```bash
 cp defineKinetics.hh defineAbioticKinetics.hh  <path to CompLB3D>/
-cd <path to CompLB3D> && cd build && cmake .. && make
+cd <path to CompLB3D> && mkdir -p build && cd build
+cmake -DPALABOS_ROOT=<path to palabos-v2.3.0> .. && make -j
 cd .. && cp <path to this folder>/CompLaB.xml .
 cp -r <path to this folder>/input .
 ./complab
 ```
 
-`runAllExamples.sh` in the parent folder does all of that for every case.
+`runAllExamples.sh` in the parent folder does all of that for every case, and
+groups the cases by cmake configuration so the tree is reconfigured three times
+rather than sixteen.

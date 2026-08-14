@@ -1,7 +1,7 @@
 """Shared XML fragments for the CompLB3D example suite.
 
 Every example is assembled from these, so a change to the house style or a
-correction to a tag name happens in one place instead of fifteen.
+correction to a tag name happens in one place instead of sixteen.
 
 Note on XML comments: a comment body may not contain two consecutive hyphens.
 That rules out the usual "-->" arrow and any "--" dash inside prose. Every
@@ -37,7 +37,7 @@ def path(input_path="input"):
 
 def domain(geometry, materials="", peclet=0, delta_P="1e-6", tau="0.8",
            ade_max_iT=400, ns_max_iT1=20000, ade_update_interval=1,
-           ns_update_interval=10):
+           ns_update_interval=10, generate_note=""):
     return """
     <LB_numerics>
         <domain>
@@ -47,7 +47,7 @@ def domain(geometry, materials="", peclet=0, delta_P="1e-6", tau="0.8",
             <dx>10</dx>
             <unit>um</unit>
             <characteristic_length>%d</characteristic_length>
-            <filename>%s</filename>
+            <filename>%s</filename>%s
             <material_numbers>
                 <pore>2</pore>
                 <solid>0</solid>
@@ -71,7 +71,7 @@ def domain(geometry, materials="", peclet=0, delta_P="1e-6", tau="0.8",
             <ade_converge_iT>1e-8</ade_converge_iT>
         </iteration>
     </LB_numerics>
-""" % (NX, NY, NZ, NY, geometry, materials, delta_P, peclet, tau,
+""" % (NX, NY, NZ, NY, geometry, generate_note, materials, delta_P, peclet, tau,
        ns_max_iT1, ns_update_interval, ade_update_interval, ade_max_iT)
 
 
@@ -172,3 +172,29 @@ OFF_DISSOL = """
         <enabled>false</enabled>
     </dissolution>
 """
+
+def diagnostics(interval=100, conserve=(), csv="summary.csv", tol="1e-6", note=""):
+    """The <diagnostics> block.
+
+    Writes output/<csv>, one row per interval: porosity, open voxel count, and
+    the total, mean, minimum and maximum of every substrate.
+
+    `conserve` is a list of "+"-separated sums that the reaction network cannot
+    create or destroy. Pass none and the CSV is still written; there is simply
+    nothing that can be reported as failed. Only name a CLOSED sum -- a
+    substrate held at a fixed concentration on an inlet is supplied from outside
+    and its total is not conserved, so naming it guarantees a failure that says
+    nothing about the chemistry."""
+    lines = ""
+    for i, expr in enumerate(conserve):
+        tag = "conserve" if i == 0 else "conserve%d" % i
+        lines += "        <%s>%s</%s>\n" % (tag, expr, tag)
+    return """
+    <!-- The run's own scalar record. output/%s gets one row every %d steps.%s -->
+    <diagnostics>
+        <enabled>true</enabled>
+        <summary_csv>%s</summary_csv>
+        <interval>%d</interval>
+        <tolerance>%s</tolerance>
+%s    </diagnostics>
+""" % (csv, interval, note, csv, interval, tol, lines)

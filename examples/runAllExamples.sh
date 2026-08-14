@@ -16,7 +16,8 @@
 #
 # Three of the cases also need a different cmake configuration: 09 and 12 need
 # GLPK, 10 needs Python. The script groups them so the number of full rebuilds
-# stays down.
+# stays down. Case 16 needs GLPK too: it trains its surrogate by sweeping a
+# linear program at start-up.
 #
 # ---------------------------------------------------------------------------
 # USAGE
@@ -64,11 +65,11 @@ trap restore EXIT INT TERM
 
 # ---------------------------------------------------------------------------
 # Which cmake flags each case needs. Cases sharing a configuration are run
-# together so the tree is reconfigured three times, not fifteen.
+# together so the tree is reconfigured three times, not sixteen.
 # ---------------------------------------------------------------------------
 cmake_flags_for() {
     case "$1" in
-        09|12) echo "-DENABLE_GLPK=ON" ;;
+        09|12|16) echo "-DENABLE_GLPK=ON" ;;
         10)    echo "-DENABLE_COBRAPY=ON" ;;
         *)     echo "" ;;
     esac
@@ -142,6 +143,10 @@ for dir in "$HERE"/[0-9][0-9]_*; do
     mkdir -p "$RUN/output" "$RUN/src"
     # COBRApy imports its module by name at run time from <src_path>
     [ -f "$CODE/src/complab3d_cobrapy.py" ] && cp "$CODE/src/complab3d_cobrapy.py" "$RUN/src/"
+    # <model_bundle> defaults to "models" relative to the working directory, and
+    # each case runs in its own scratch dir, so the bundle has to come along.
+    # Only the gzipped models are copied; they are about 1 MB in total.
+    [ -d "$CODE/models" ] && cp -r "$CODE/models" "$RUN/"
 
     # Under Slurm, launch through srun so the job's ranks are used. Outside
     # it, run serially: these domains are far too small for MPI to help, and a
@@ -160,12 +165,22 @@ for dir in "$HERE"/[0-9][0-9]_*; do
     # cleanly having produced nonsense. So also insist that nothing reported a
     # negative concentration and that no line says Terminating.
     PROBLEM=""
-    [ $RC -ne 0 ] && PROBLEM="exit code $RC"
-    if grep -q "Terminating" "$RUN/run.log" 2>/dev/null; then
+    [ "$RC" -ne 0 ] && PROBLEM="exit code $RC"
+
+    # -a: the run log contains NUL bytes (Palabos writes some binary padding),
+    # and without it grep treats the whole file as binary and reports a match
+    # for every pattern -- which marked passing cases as "input rejected".
+    if grep -aq "Terminating" "$RUN/run.log" 2>/dev/null; then
         PROBLEM="${PROBLEM:+$PROBLEM; }input rejected at start-up"
     fi
-    NEG=$(grep -c "\[NEG!\]" "$RUN/run.log" 2>/dev/null || echo 0)
-    if [ "$NEG" -gt 0 ]; then
+
+    # `grep -c` exits 1 when the count is zero, so the old
+    #     NEG=$(grep -c ... || echo 0)
+    # produced the two-line string "0\n0" on every clean run and then failed
+    # the arithmetic test with "integer expression expected".
+    NEG=$(grep -ac "\[NEG!\]" "$RUN/run.log" 2>/dev/null)
+    NEG=${NEG:-0}
+    if [ "$NEG" -gt 0 ] 2>/dev/null; then
         PROBLEM="${PROBLEM:+$PROBLEM; }$NEG negative-concentration warning(s)"
     fi
 

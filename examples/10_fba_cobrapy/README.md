@@ -37,14 +37,36 @@ COBRApy needs `src/complab3d_cobrapy.py` present at `<src_path>`
 at run time; it is imported by name, not compiled in. Expect one
 to two orders of magnitude slower than GLPK.
 
+**A safer way to write the exchange mapping.** `<exchange_reaction_indices>` is
+positional: the numbers are correct only for this exact model file.
+Insert one reaction into it and every index after that points somewhere
+else, with nothing to complain.
+
+`<exchange_reaction_names>` names the reactions instead, and they are
+resolved against the model at start-up, so a wrong one stops the run and
+prints the near matches. It needs an SBML model; the matrix format that
+`toy_model.xml` uses does not carry reaction names, which is why this
+case still uses indices. **Example 16 shows the named form**, on a real
+genome-scale model.
+
 ## Running it
+
+The rate laws are compiled in, so each case needs its own build.
 
 ```bash
 cp defineKinetics.hh defineAbioticKinetics.hh  <path to CompLB3D>/
-cd <path to CompLB3D> && cd build && cmake -DENABLE_COBRAPY=ON .. && make
+cd <path to CompLB3D> && mkdir -p build && cd build
+cmake -DPALABOS_ROOT=<path to palabos-v2.3.0> -DENABLE_COBRAPY=ON .. && make -j
 cd .. && cp <path to this folder>/CompLaB.xml .
 cp -r <path to this folder>/input .
 ./complab
 ```
 
-`runAllExamples.sh` in the parent folder does all of that for every case.
+**`-DENABLE_COBRAPY=ON` is not optional for this case**, and `cobra` has to be
+importable by the interpreter the executable was LINKED against, which is not
+necessarily the `python3` on your PATH. If the import fails the run prints which
+interpreter is embedded.
+
+`runAllExamples.sh` in the parent folder does all of that for every case, and
+groups the cases by cmake configuration so the tree is reconfigured three times
+rather than sixteen.

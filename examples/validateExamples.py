@@ -42,8 +42,12 @@ import xml.etree.ElementTree as ET
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# tags that are numbered rather than fixed
-DYNAMIC = re.compile(r'^(substrate|microbe|phase|species)\d+$')
+# Tags that are numbered rather than fixed.
+#   input0..input7    the surrogate training ranges, one per network input
+#   conserve1..31     the extra conserved sums in <diagnostics>
+# Both are built with snprintf in the C++, so the literal name never appears in
+# the source and the tag extractor below cannot see them.
+DYNAMIC = re.compile(r'^(substrate|microbe|phase|species|input|conserve)\d+$')
 
 VALID_REACTION = {
     "none", "no", "0", "kinetics", "kns", "1", "2", "3", "4", "5", "6", "7",
@@ -83,6 +87,15 @@ def known_tags(src_dir):
             tags |= set(re.findall(r'\[\s*"([a-zA-Z_0-9]+)"\s*\]', text))
             # keys built in tables rather than written inline
             tags |= set(re.findall(r'"(enable_[a-z_]+|fix_[a-z_]+)"', text))
+            # Tags passed as ARGUMENTS rather than as subscripts.
+            #   complab3d_integration.hh reads the newer blocks through a helper,
+            #       getOpt(doc, "parameters", "model_source", 0, out)
+            #   so the tag name never appears inside doc[...] and this extractor
+            #   used to call every one of them unknown. Harvest the string
+            #   literals on any line that calls it.
+            for line in text.splitlines():
+                if "getOpt(" in line:
+                    tags |= set(re.findall(r'"([a-z_][a-z_0-9]*)"', line))
     return tags
 
 

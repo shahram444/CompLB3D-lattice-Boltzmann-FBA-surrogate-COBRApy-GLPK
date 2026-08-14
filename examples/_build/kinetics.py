@@ -32,6 +32,51 @@ LICENCE = """/* This file is a part of the CompLaB program.
 # Inert: no reactions at all. Used by the transport-only cases so that the
 # shipped uranium network cannot fire by accident.
 # ---------------------------------------------------------------------------
+
+STATS = """
+/* -----------------------------------------------------------------------------
+ * KineticsStats -- REQUIRED BY THE SOLVER, NOT OPTIONAL
+ *
+ * complab.cpp calls KineticsStats::getStats() and KineticsStats::resetIteration()
+ * at every output interval, to print the per-interval kinetics summary. Those
+ * calls are compiled unconditionally, so ANY defineKinetics.hh must declare this
+ * namespace or the whole program fails to link -- even a case with no kinetics
+ * at all, where the calls are guarded at run time by `if (kns_count > 0)`.
+ *
+ * The shipped defineKinetics.hh in the project root has it. Generated example
+ * headers must have it too; it is reproduced here rather than #included so that
+ * each example header stays self-contained and can be dropped into the source
+ * tree on its own.
+ *
+ * A rate law that never calls accumulate() simply reports zeros, which is
+ * correct for a case that does no biotic kinetics.
+ * ----------------------------------------------------------------------------- */
+namespace KineticsStats {
+    static const double MIN_BIOMASS = 1e-12;    // below this a voxel is counted as empty
+    static double iter_sum_dB = 0.0, iter_max_biomass = 0.0, iter_max_dB = 0.0, iter_min_DOC = 1e30;
+    static long   iter_cells_with_biomass = 0, iter_cells_with_growth = 0;
+
+    inline void resetIteration() {
+        iter_sum_dB = 0; iter_max_biomass = 0; iter_max_dB = 0; iter_min_DOC = 1e30;
+        iter_cells_with_biomass = 0; iter_cells_with_growth = 0;
+    }
+    inline void accumulate(double biomass, double donor, double dB) {
+        if (biomass > MIN_BIOMASS) {
+            iter_cells_with_biomass++; iter_sum_dB += dB;
+            if (biomass > iter_max_biomass) iter_max_biomass = biomass;
+            if (dB > iter_max_dB) iter_max_dB = dB;
+            if (donor < iter_min_DOC && donor > 0) iter_min_DOC = donor;
+            if (dB > 0) iter_cells_with_growth++;
+        }
+    }
+    inline void getStats(long& cb, long& cg, double& s, double& mB, double& mdB, double& mD) {
+        cb = iter_cells_with_biomass; cg = iter_cells_with_growth;
+        s  = iter_sum_dB; mB = iter_max_biomass; mdB = iter_max_dB;
+        mD = (iter_min_DOC < 1e20) ? iter_min_DOC : 0.0;
+    }
+}
+"""
+
 KINETICS_INERT = LICENCE + """
 /* =============================================================================
  * defineKinetics.hh  --  EXAMPLE: no biological reactions
@@ -45,7 +90,7 @@ KINETICS_INERT = LICENCE + """
 
 #include <vector>
 #include <cstddef>
-
+""" + STATS + """
 void defineRxnKinetics(std::vector<double> B, std::vector<double> C,
                        std::vector<double>& subsR, std::vector<double>& bioR,
                        plb::plint mask)
@@ -197,7 +242,7 @@ KINETICS_MONOD = LICENCE + """
 #include <cstddef>
 #include <cmath>
 #include <algorithm>
-
+""" + STATS + """
 namespace ExampleMonod {
     // one entry per microbe, in CompLaB.xml order
     const double mu_max[2] = { 2.0e-4, 1.0e-4 };   // 1/s     max specific growth rate
@@ -233,6 +278,8 @@ void defineRxnKinetics(std::vector<double> B, std::vector<double> C,
         bioR[m]  += growth - kd[p] * Bm;
         subsR[0] -= growth / Y[p];                                // donor consumed
         subsR[1] += growth * fP[p];                               // product released
+
+        KineticsStats::accumulate(Bm, S, growth - kd[p] * Bm);    // feeds the per-interval report
     }
 
     for (std::size_t i = 0; i < subsR.size(); ++i)
@@ -275,7 +322,7 @@ KINETICS_MAINTENANCE = LICENCE + """
 #include <cstddef>
 #include <cmath>
 #include <algorithm>
-
+""" + STATS + """
 namespace ExampleMaintenance {
     const double m_S = 2.0e-6;      // mol of donor per gDW per second, no growth
 }
@@ -340,7 +387,28 @@ ABIOTIC_PRECIP = LICENCE + """
 #include <algorithm>
 
 namespace ExamplePrecip {
-    const double k_FeS = 2.0e+1;     // L/mol/s
+/* WHY THIS RATE CONSTANT AND NOT A LARGER ONE
+ *
+ *   The solver applies these rates explicitly:  C += subsR * dt.  Nothing between
+ *   this function and the concentration field stops a rate from consuming more
+ *   reactant than the voxel holds, so the rate law itself must be small enough
+ *   that it cannot.  The condition is
+ *
+ *       R * dt  <<  min(reactant concentrations)
+ *
+ *   With the second-order form R = k * A * B, the worst case is both reactants at
+ *   their inlet value C_in, which gives  k * C_in^2 * dt  <<  C_in, i.e.
+ *
+ *       k  <<  1 / (C_in * dt)
+ *
+ *   This case has C_in = 5 mol/L and dt near 1.2e-2 s, so k must stay well below
+ *   about 16 L/mol/s.  The value below leaves an order of magnitude of margin.
+ *
+ *   Getting this wrong does not crash: concentrations simply go negative, the run
+ *   continues, and the answer is nonsense.  <diagnostics> reports it -- that is
+ *   what the "went negative" line is for.
+ */
+    const double k_FeS = 1.0;        // L/mol/s   (see the note above before raising this)
 }
 
 void defineAbioticRxnKinetics(std::vector<double> C, std::vector<double>& subsR,
@@ -499,7 +567,28 @@ ABIOTIC_BOTH = LICENCE + """
 #include <algorithm>
 
 namespace ExampleBoth {
-    const double kp_FeS = 2.0e+1;    // L/mol/s     precipitation
+/* WHY THIS RATE CONSTANT AND NOT A LARGER ONE
+ *
+ *   The solver applies these rates explicitly:  C += subsR * dt.  Nothing between
+ *   this function and the concentration field stops a rate from consuming more
+ *   reactant than the voxel holds, so the rate law itself must be small enough
+ *   that it cannot.  The condition is
+ *
+ *       R * dt  <<  min(reactant concentrations)
+ *
+ *   With the second-order form R = k * A * B, the worst case is both reactants at
+ *   their inlet value C_in, which gives  k * C_in^2 * dt  <<  C_in, i.e.
+ *
+ *       k  <<  1 / (C_in * dt)
+ *
+ *   This case has C_in = 5 mol/L and dt near 1.2e-2 s, so k must stay well below
+ *   about 16 L/mol/s.  The value below leaves an order of magnitude of margin.
+ *
+ *   Getting this wrong does not crash: concentrations simply go negative, the run
+ *   continues, and the answer is nonsense.  <diagnostics> reports it -- that is
+ *   what the "went negative" line is for.
+ */
+    const double kp_FeS = 1.0;       // L/mol/s     precipitation (see the note above)
     const double kd_FeS = 5.0e-2;    // L/mol/s     dissolution, per mol/L left
 }
 

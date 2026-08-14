@@ -37,14 +37,34 @@ Drop `<fba_maximum_uptake_flux>` to `4. 10. 0.` and the donor
 becomes limiting instead, so growth should settle near 4. That
 is a second independent check for one line of editing.
 
+**A safer way to write the exchange mapping.** `<exchange_reaction_indices>` is
+positional: the numbers are correct only for this exact model file.
+Insert one reaction into it and every index after that points somewhere
+else, with nothing to complain.
+
+`<exchange_reaction_names>` names the reactions instead, and they are
+resolved against the model at start-up, so a wrong one stops the run and
+prints the near matches. It needs an SBML model; the matrix format that
+`toy_model.xml` uses does not carry reaction names, which is why this
+case still uses indices. **Example 16 shows the named form**, on a real
+genome-scale model.
+
 ## Running it
+
+The rate laws are compiled in, so each case needs its own build.
 
 ```bash
 cp defineKinetics.hh defineAbioticKinetics.hh  <path to CompLB3D>/
-cd <path to CompLB3D> && cd build && cmake -DENABLE_GLPK=ON .. && make
+cd <path to CompLB3D> && mkdir -p build && cd build
+cmake -DPALABOS_ROOT=<path to palabos-v2.3.0> -DENABLE_GLPK=ON .. && make -j
 cd .. && cp <path to this folder>/CompLaB.xml .
 cp -r <path to this folder>/input .
 ./complab
 ```
 
-`runAllExamples.sh` in the parent folder does all of that for every case.
+**`-DENABLE_GLPK=ON` is not optional for this case.** Without it the run
+stops at start-up naming the flag.
+
+`runAllExamples.sh` in the parent folder does all of that for every case, and
+groups the cases by cmake configuration so the tree is reconfigured three times
+rather than sixteen.

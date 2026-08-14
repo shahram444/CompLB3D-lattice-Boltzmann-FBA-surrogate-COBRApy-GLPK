@@ -34,7 +34,28 @@
 #include <algorithm>
 
 namespace ExamplePrecip {
-    const double k_FeS = 2.0e+1;     // L/mol/s
+/* WHY THIS RATE CONSTANT AND NOT A LARGER ONE
+ *
+ *   The solver applies these rates explicitly:  C += subsR * dt.  Nothing between
+ *   this function and the concentration field stops a rate from consuming more
+ *   reactant than the voxel holds, so the rate law itself must be small enough
+ *   that it cannot.  The condition is
+ *
+ *       R * dt  <<  min(reactant concentrations)
+ *
+ *   With the second-order form R = k * A * B, the worst case is both reactants at
+ *   their inlet value C_in, which gives  k * C_in^2 * dt  <<  C_in, i.e.
+ *
+ *       k  <<  1 / (C_in * dt)
+ *
+ *   This case has C_in = 5 mol/L and dt near 1.2e-2 s, so k must stay well below
+ *   about 16 L/mol/s.  The value below leaves an order of magnitude of margin.
+ *
+ *   Getting this wrong does not crash: concentrations simply go negative, the run
+ *   continues, and the answer is nonsense.  <diagnostics> reports it -- that is
+ *   what the "went negative" line is for.
+ */
+    const double k_FeS = 1.0;        // L/mol/s   (see the note above before raising this)
 }
 
 void defineAbioticRxnKinetics(std::vector<double> C, std::vector<double>& subsR,
